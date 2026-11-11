@@ -21,7 +21,7 @@ Everything is on the button bar at the bottom of the screen:
 | **THROTTLE** | Drag to rev the engine. Drag back to the left to idle. |
 | **DYNO** | Measures power and torque. |
 | **VOLUME** | Sound level, remembered for next time. |
-| **ENGINES** | Pick one of the 25 built-in engines, or one you built. |
+| **ENGINES** | Pick one of the 20 built-in engines, or one you built. |
 | **BUILD ENGINE** | Design your own engine: layout, cylinders, size, redline, cam and exhaust. |
 | **VIEW** | Simple screen, detailed screen (all gauges) or engine only. |
 | **HELP** | Shows the controls. Press **F1** any time. |
@@ -49,5 +49,6 @@ Tab view · F fullscreen · F1 help · Enter reload · 1–5 slow motion · F2/F
 - In-app engine builder
 - Simple view by default (detailed view one click away)
 - A mistake in an engine script now shows an error instead of crashing
+- Fixed a memory bug that could crash engines with more than 8 cylinders (V10, V12)
 - Remembers your last engine, volume and view
 - Works when started from a shortcut

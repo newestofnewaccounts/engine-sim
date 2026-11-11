@@ -376,8 +376,6 @@ void PistonEngineSimulator::writeToSynthesizer() {
     const double attenuation = std::min(std::abs(filteredEngineSpeed()), 40.0) / 40.0;
     const double attenuation_3 = attenuation * attenuation * attenuation;
 
-    static double lastValveLift[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-
     const double timestep = getTimestep();
     const int cylinderCount = m_engine->getCylinderCount();
     for (int i = 0; i < cylinderCount; ++i) {
@@ -397,7 +395,8 @@ void PistonEngineSimulator::writeToSynthesizer() {
                 + 0.1 * chamber->m_exhaustRunnerAndPrimary.dynamicPressure(1.0, 0.0)
                 + 0.1 * chamber->m_exhaustRunnerAndPrimary.dynamicPressure(-1.0, 0.0));
 
-        lastValveLift[i] = head->exhaustValveLift(piston->getCylinderIndex());
+        // Simple Edition: removed an unused 8-slot array that was written past
+        // its end on engines with more than 8 cylinders (memory corruption).
 
         const double delayedExhaustPulse =
             m_delayFilters[i].fast_f(exhaustFlow);
