@@ -55,9 +55,9 @@ jobs:
       - name: Install Flex and Bison
         run: choco install winflexbison3 -y --no-progress
 
-      - name: Cache Boost (vcpkg)
+      - name: Restore Boost (vcpkg)
         id: cache-boost
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg\installed
           key: vcpkg-boost-filesystem-x64-windows-static-md-v1
@@ -65,6 +65,14 @@ jobs:
       - name: Install Boost
         if: steps.cache-boost.outputs.cache-hit != 'true'
         run: C:\vcpkg\vcpkg.exe install boost-filesystem:x64-windows-static-md
+
+      # Saved right away so failed builds don't have to rebuild Boost
+      - name: Save Boost (vcpkg)
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-boost-filesystem-x64-windows-static-md-v1
 
       - name: Download SDL2
         shell: pwsh
