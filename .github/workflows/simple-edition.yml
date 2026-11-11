@@ -1,0 +1,160 @@
+name: Build Simple Edition
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the build as the 'simple-latest' download"
+        type: boolean
+        default: false
+
+concurrency:
+  group: simple-edition-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  SDL2_VERSION: 2.30.9
+  SDL2_IMAGE_VERSION: 2.8.2
+  PACKAGE: engine-sim-simple-edition
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Changes are uploaded as one text file (simple-edition.b64) because
+      # they are added through the GitHub website. Unpack it over the code and
+      # commit the real files back so the repository shows normal source.
+      - name: Unpack uploaded changes
+        shell: pwsh
+        run: |
+          if (Test-Path simple-edition.b64) {
+            $text = (Get-Content simple-edition.b64 -Raw) -replace '\s', ''
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\bundle.zip", [Convert]::FromBase64String($text))
+            Expand-Archive "$env:RUNNER_TEMP\bundle.zip" -DestinationPath . -Force
+            Remove-Item simple-edition.b64
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Unpack Simple Edition changes"
+            git push
+          }
+          else {
+            Write-Host "No bundle to unpack"
+          }
+
+      - name: Install Flex and Bison
+        run: choco install winflexbison3 -y --no-progress
+
+      - name: Cache Boost (vcpkg)
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-boost-filesystem-x64-windows-static-md-v1
+
+      - name: Install Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        run: C:\vcpkg\vcpkg.exe install boost-filesystem:x64-windows-static-md
+
+      - name: Download SDL2
+        shell: pwsh
+        run: |
+          $deps = "$env:RUNNER_TEMP\deps"
+          New-Item -ItemType Directory -Force $deps | Out-Null
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$env:SDL2_VERSION/SDL2-devel-$env:SDL2_VERSION-VC.zip" -OutFile "$deps\sdl2.zip"
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL_image/releases/download/release-$env:SDL2_IMAGE_VERSION/SDL2_image-devel-$env:SDL2_IMAGE_VERSION-VC.zip" -OutFile "$deps\sdl2_image.zip"
+          Expand-Archive "$deps\sdl2.zip" -DestinationPath $deps
+          Expand-Archive "$deps\sdl2_image.zip" -DestinationPath $deps
+          "SDL2DIR=$deps\SDL2-$env:SDL2_VERSION" >> $env:GITHUB_ENV
+          "SDL2IMAGEDIR=$deps\SDL2_image-$env:SDL2_IMAGE_VERSION" >> $env:GITHUB_ENV
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          -DDISCORD_ENABLED=OFF
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          -DVCPKG_MANIFEST_MODE=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --target engine-sim-app engine-sim-check -- /m
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $pkg = "package\$env:PACKAGE"
+          New-Item -ItemType Directory -Force "$pkg\bin", "$pkg\basic" | Out-Null
+
+          Copy-Item build\Release\engine-sim-app.exe "$pkg\bin\"
+          Copy-Item "$env:SDL2DIR\lib\x64\SDL2.dll" "$pkg\bin\"
+          Copy-Item "$env:SDL2IMAGEDIR\lib\x64\SDL2_image.dll" "$pkg\bin\"
+          Copy-Item "${env:ProgramFiles(x86)}\Windows Kits\10\Redist\D3D\x64\d3dcompiler_47.dll" "$pkg\bin\"
+          foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            Copy-Item "$env:WINDIR\System32\$dll" "$pkg\bin\"
+          }
+          Set-Content -Path "$pkg\bin\delta.conf" -Value "../basic`n../assets" -NoNewline -Encoding ascii
+
+          Copy-Item assets "$pkg\assets" -Recurse
+          Copy-Item es "$pkg\es" -Recurse
+          Copy-Item dependencies\submodules\delta-studio\engines\basic\fonts "$pkg\basic\fonts" -Recurse
+          Copy-Item dependencies\submodules\delta-studio\engines\basic\shaders "$pkg\basic\shaders" -Recurse
+          Copy-Item LICENSE "$pkg\LICENSE.txt"
+          if (Test-Path SIMPLE-EDITION.md) { Copy-Item SIMPLE-EDITION.md "$pkg\README.md" }
+
+          Get-ChildItem $pkg -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { "Package: $($_.Count) files, $([math]::Round($_.Sum / 1MB, 1)) MB" }
+
+      - name: Check engines
+        id: check
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $bin = "package\$env:PACKAGE\bin"
+          Copy-Item build\Release\engine-sim-check.exe $bin
+          Push-Location $bin
+          try {
+            .\engine-sim-check.exe "$env:GITHUB_STEP_SUMMARY" | Tee-Object -FilePath "$env:RUNNER_TEMP\engine-check.txt"
+            $code = $LASTEXITCODE
+          }
+          finally {
+            Pop-Location
+            Remove-Item "$bin\engine-sim-check.exe" -ErrorAction SilentlyContinue
+            Remove-Item "$bin\error_log.log" -ErrorAction SilentlyContinue
+          }
+          exit $code
+
+      - name: Upload check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-check-report
+          path: ${{ runner.temp }}/engine-check.txt
+          if-no-files-found: ignore
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: package
+
+      - name: Publish download
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path "package\$env:PACKAGE" -DestinationPath "$env:PACKAGE.zip"
+          gh release delete simple-latest --yes --cleanup-tag 2>$null
+          $notes = "Download $env:PACKAGE.zip, unzip it anywhere, then open the folder and run bin\engine-sim-app.exe."
+          gh release create simple-latest "$env:PACKAGE.zip" --title "Engine Simulator - Simple Edition" --notes $notes --target $env:GITHUB_SHA
