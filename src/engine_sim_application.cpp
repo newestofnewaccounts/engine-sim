@@ -13,12 +13,19 @@
 #include "../include/exhaust_system.h"
 #include "../include/feedback_comb_filter.h"
 #include "../include/utilities.h"
+#include "../include/engine_builder.h"
+#include "../include/engine_library.h"
 
 #include "../scripting/include/compiler.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdlib.h>
 #include <sstream>
+
+#undef min
+#undef max
 
 #if ATG_ENGINE_SIM_DISCORD_ENABLED
 #include "../discord/Discord.h"
@@ -82,6 +89,10 @@ EngineSimApplication::EngineSimApplication() {
     m_viewParameters.Layer1 = 0;
 
     m_displayAngle = 0.0f;
+
+    m_controlBar = nullptr;
+    m_banner = nullptr;
+    m_overlay = nullptr;
 }
 
 EngineSimApplication::~EngineSimApplication() {
@@ -105,10 +116,20 @@ void EngineSimApplication::initialize(void *instance, ysContextObject::DeviceAPI
         confFile.close();
     }
 
+    // Simple Edition: remembered choices (last engine, volume, view, ...)
+    m_settings.load(modulePath.Append("simple_settings.ini").ToString());
+    m_simple.volume = std::min(1.0, std::max(0.0, m_settings.getDouble("volume", 1.0)));
+    m_simple.viewMode = std::min(2, std::max(0, m_settings.getInt("view", 2)));
+    m_screen = m_simple.viewMode;
+    EngineBuilder::deserialize(m_settings.get("builder", ""), &m_simple.builder);
+    if (!m_settings.getBool("help_seen", false)) {
+        m_simple.overlay = SimpleOverlay::Help;
+    }
+
     m_engine.GetConsole()->SetDefaultFontDirectory(enginePath + "/fonts/");
 
     const std::string shaderPath = enginePath + "/shaders/";
-    const std::string winTitle = "Engine Sim | AngeTheGreat | v" + s_buildVersion;
+    const std::string winTitle = "Engine Simulator - Simple Edition | based on Engine Sim by AngeTheGreat | v" + s_buildVersion;
     dbasic::DeltaEngine::GameEngineSettings settings;
     settings.API = api;
     settings.DepthBuffer = false;
@@ -164,7 +185,7 @@ void EngineSimApplication::initialize() {
     m_textRenderer.SetRenderer(m_engine.GetUiRenderer());
     m_textRenderer.SetFont(m_engine.GetConsole()->GetFont());
 
-    loadScript();
+    loadStartupEngine();
 
     m_audioBuffer.initialize(44100, 44100);
     m_audioBuffer.m_writePointer = (int)(44100 * 0.1);
@@ -177,7 +198,7 @@ void EngineSimApplication::initialize() {
         m_engine.GetAudioDevice()->CreateBuffer(&params, 44100);
 
     m_audioSource = m_engine.GetAudioDevice()->CreateSource(m_outputAudioBuffer);
-    m_audioSource->SetMode((m_simulator->getEngine() != nullptr)
+    m_audioSource->SetMode((m_simulator != nullptr && m_simulator->getEngine() != nullptr)
         ? ysAudioSource::Mode::Loop
         : ysAudioSource::Mode::Stop);
     m_audioSource->SetPan(0.0f);
@@ -200,6 +221,8 @@ void EngineSimApplication::initialize() {
 }
 
 void EngineSimApplication::process(float frame_dt) {
+    if (m_simulator == nullptr || m_iceEngine == nullptr) return;
+
     frame_dt = static_cast<float>(clamp(frame_dt, 1 / 200.0f, 1 / 30.0f));
 
     double speed = 1.0 / 1.0;
@@ -219,13 +242,14 @@ void EngineSimApplication::process(float frame_dt) {
         speed = 1 / 1000.0;
     }
 
-    if (m_engine.IsKeyDown(ysKey::Code::F1)) {
+    // Simple Edition: F1 is now Help, so display rotation moved to F2-F4
+    if (m_engine.IsKeyDown(ysKey::Code::F2)) {
         m_displayAngle += frame_dt * 1.0f;
     }
-    else if (m_engine.IsKeyDown(ysKey::Code::F2)) {
+    else if (m_engine.IsKeyDown(ysKey::Code::F3)) {
         m_displayAngle -= frame_dt * 1.0f;
     }
-    else if (m_engine.ProcessKeyDown(ysKey::Code::F3)) {
+    else if (m_engine.ProcessKeyDown(ysKey::Code::F4)) {
         m_displayAngle = 0.0f;
     }
 
@@ -312,23 +336,27 @@ void EngineSimApplication::process(float frame_dt) {
 }
 
 void EngineSimApplication::render() {
-    for (SimulationObject *object : m_objects) {
-        object->generateGeometry();
-    }
+    // Simple Edition: the engine picture is hidden while a full screen
+    // panel (help, engine list, builder) is open.
+    if (!isOverlayOpen()) {
+        for (SimulationObject *object : m_objects) {
+            object->generateGeometry();
+        }
 
-    m_viewParameters.Sublayer = 0;
-    for (SimulationObject *object : m_objects) {
-        object->render(&getViewParameters());
-    }
+        m_viewParameters.Sublayer = 0;
+        for (SimulationObject *object : m_objects) {
+            object->render(&getViewParameters());
+        }
 
-    m_viewParameters.Sublayer = 1;
-    for (SimulationObject *object : m_objects) {
-        object->render(&getViewParameters());
-    }
+        m_viewParameters.Sublayer = 1;
+        for (SimulationObject *object : m_objects) {
+            object->render(&getViewParameters());
+        }
 
-    m_viewParameters.Sublayer = 2;
-    for (SimulationObject *object : m_objects) {
-        object->render(&getViewParameters());
+        m_viewParameters.Sublayer = 2;
+        for (SimulationObject *object : m_objects) {
+            object->render(&getViewParameters());
+        }
     }
 
     m_uiManager.render();
@@ -350,20 +378,27 @@ void EngineSimApplication::run() {
 
         if (!m_engine.IsOpen()) break;
         if (m_engine.ProcessKeyDown(ysKey::Code::Escape)) {
-            break;
-        }
-
-        if (m_engine.ProcessKeyDown(ysKey::Code::Return)) {
-            m_audioSource->SetMode(ysAudioSource::Mode::Stop);
-            loadScript();
-            if (m_simulator->getEngine() != nullptr) {
-                m_audioSource->SetMode(ysAudioSource::Mode::Loop);
+            // Simple Edition: Escape first closes an open panel
+            if (isOverlayOpen()) {
+                m_simple.push(SimpleCommand::Type::CloseOverlay);
+            }
+            else {
+                break;
             }
         }
 
+        if (m_engine.ProcessKeyDown(ysKey::Code::Return)) {
+            reloadCurrentEngine();
+        }
+
+        if (m_engine.ProcessKeyDown(ysKey::Code::F1)) {
+            m_simple.push(isOverlayOpen() && m_simple.overlay == SimpleOverlay::Help
+                ? SimpleCommand::Type::CloseOverlay
+                : SimpleCommand::Type::OpenHelp);
+        }
+
         if (m_engine.ProcessKeyDown(ysKey::Code::Tab)) {
-            m_screen++;
-            if (m_screen > 2) m_screen = 0;
+            m_simple.push(SimpleCommand::Type::CycleView);
         }
 
         if (m_engine.ProcessKeyDown(ysKey::Code::F)) {
@@ -403,7 +438,12 @@ void EngineSimApplication::run() {
             process(m_engine.GetFrameLength());
         }
 
+        updateSimpleState();
         m_uiManager.update(m_engine.GetFrameLength());
+
+        // Button clicks are queued and handled here, outside of the UI code,
+        // because loading an engine rebuilds the whole UI.
+        processSimpleCommands();
 
         renderScene();
 
@@ -418,7 +458,11 @@ void EngineSimApplication::run() {
         stopRecording();
     }
 
-    m_simulator->endAudioRenderingThread();
+    m_settings.save();
+
+    if (m_simulator != nullptr) {
+        m_simulator->endAudioRenderingThread();
+    }
 }
 
 void EngineSimApplication::destroy() {
@@ -430,7 +474,9 @@ void EngineSimApplication::destroy() {
     m_assetManager.Destroy();
     m_engine.Destroy();
 
-    m_simulator->destroy();
+    if (m_simulator != nullptr) {
+        m_simulator->destroy();
+    }
     m_audioBuffer.destroy();
 }
 
@@ -444,6 +490,7 @@ void EngineSimApplication::loadEngine(
     if (m_simulator != nullptr) {
         m_simulator->releaseSimulation();
         delete m_simulator;
+        m_simulator = nullptr;
     }
 
     if (m_vehicle != nullptr) {
@@ -465,14 +512,17 @@ void EngineSimApplication::loadEngine(
     m_vehicle = vehicle;
     m_transmission = transmission;
 
-    m_simulator = engine->createSimulator(vehicle, transmission);
-
+    // Simple Edition: check for a missing engine *before* using it (the
+    // original code crashed here when an engine script had a mistake).
     if (engine == nullptr || vehicle == nullptr || transmission == nullptr) {
         m_iceEngine = nullptr;
+        m_simulator = nullptr;
         m_viewParameters.Layer1 = 0;
 
         return;
     }
+
+    m_simulator = engine->createSimulator(vehicle, transmission);
 
     createObjects(engine);
 
@@ -616,30 +666,318 @@ const SimulationObject::ViewParameters &
 }
 
 void EngineSimApplication::loadScript() {
-    Engine *engine = nullptr;
-    Vehicle *vehicle = nullptr;
-    Transmission *transmission = nullptr;
+    loadMainScript(true);
+}
+
+// ============================================================================
+// Simple Edition: engine loading
+
+bool EngineSimApplication::compileEngineScript(
+    const std::string &path,
+    Engine **engine,
+    Vehicle **vehicle,
+    Transmission **transmission,
+    std::string *error)
+{
+    *engine = nullptr;
+    *vehicle = nullptr;
+    *transmission = nullptr;
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
+    // The compiler keeps its output between runs; clear it so a broken
+    // script can't pick up the previous engine.
+    *es_script::Compiler::output() = es_script::Compiler::Output();
+
     es_script::Compiler compiler;
-    compiler.initialize();
-    const bool compiled = compiler.compile("../assets/main.mr");
+    compiler.initialize(m_assetPath + "/../es/");
+    const bool compiled = compiler.compile(path.c_str());
+    bool ok = false;
     if (compiled) {
         const es_script::Compiler::Output output = compiler.execute();
-        configure(output.applicationSettings);
+        if (output.engine != nullptr) {
+            configure(output.applicationSettings);
 
-        engine = output.engine;
-        vehicle = output.vehicle;
-        transmission = output.transmission;
+            *engine = output.engine;
+            *vehicle = output.vehicle;
+            *transmission = output.transmission;
+            ok = true;
+        }
+        else if (error != nullptr) {
+            *error = "the script does not create an engine (it needs a 'main' that calls set_engine).";
+        }
     }
-    else {
-        engine = nullptr;
-        vehicle = nullptr;
-        transmission = nullptr;
+    else if (error != nullptr) {
+        *error = EngineLibrary::summarizeErrorLog("error_log.log");
     }
 
     compiler.destroy();
+    return ok;
+#else
+    if (error != nullptr) *error = "scripting is disabled in this build.";
+    return false;
 #endif /* ATG_ENGINE_SIM_PIRANHA_ENABLED */
+}
+
+void EngineSimApplication::installEngine(Engine *engine, Vehicle *vehicle, Transmission *transmission) {
+    if (m_audioSource != nullptr) {
+        m_audioSource->SetMode(ysAudioSource::Mode::Stop);
+    }
+
+    ensureVehicleAndTransmission(&vehicle, &transmission);
+    loadEngine(engine, vehicle, transmission);
+    refreshUserInterface();
+    applyVolume();
+
+    m_simple.throttle = 0.0;
+    m_targetSpeedSetting = 0.0;
+    m_speedSetting = 0.0;
+
+    if (m_audioSource != nullptr && m_simulator != nullptr && m_simulator->getEngine() != nullptr) {
+        m_audioSource->SetMode(ysAudioSource::Mode::Loop);
+    }
+}
+
+bool EngineSimApplication::loadEngineFromFile(const std::string &relativePath, bool showErrors) {
+    std::string error;
+    const std::string session = EngineLibrary::writeSessionScript(
+        m_assetPath, relativePath, EngineLibrary::DefaultTheme, &error);
+    if (session.empty()) {
+        if (showErrors) m_simple.showMessage(error, true, 10.0f);
+        return false;
+    }
+
+    Engine *engine = nullptr;
+    Vehicle *vehicle = nullptr;
+    Transmission *transmission = nullptr;
+    if (!compileEngineScript(session, &engine, &vehicle, &transmission, &error)) {
+        if (showErrors) {
+            m_simple.showMessage("Could not load that engine: " + error, true, 12.0f);
+        }
+        return false;
+    }
+
+    installEngine(engine, vehicle, transmission);
+
+    m_simple.currentEnginePath = relativePath;
+    m_settings.set("last_engine", relativePath);
+    m_settings.save();
+
+    m_simple.showMessage("Loaded " + engine->getName() + ".  Hold START to start it.", false, 6.0f);
+    return true;
+}
+
+bool EngineSimApplication::loadMainScript(bool showErrors) {
+    Engine *engine = nullptr;
+    Vehicle *vehicle = nullptr;
+    Transmission *transmission = nullptr;
+    std::string error;
+
+    if (!compileEngineScript(m_assetPath + "/main.mr", &engine, &vehicle, &transmission, &error)) {
+        if (showErrors) m_simple.showMessage("Could not load main.mr: " + error, true, 12.0f);
+        return false;
+    }
+
+    installEngine(engine, vehicle, transmission);
+    m_simple.currentEnginePath = "";
+    return true;
+}
+
+void EngineSimApplication::loadStartupEngine() {
+    const std::string last = m_settings.get("last_engine", "");
+    if (!last.empty() && loadEngineFromFile(last, true)) return;
+    if (loadMainScript(false)) return;
+
+    // Last resort: build a default engine so there is always something to play with
+    EngineBuilderSettings defaults;
+    std::string error;
+    const std::string relative = EngineLibrary::saveCustomEngine(
+        m_assetPath, EngineBuilder::fileStem(defaults), EngineBuilder::generateScript(defaults), &error);
+    if (!relative.empty() && loadEngineFromFile(relative, true)) return;
+
+    // Nothing could be loaded; keep the app running with an empty screen
+    loadEngine(nullptr, nullptr, nullptr);
+    refreshUserInterface();
+    m_simple.showMessage("No engine could be loaded. Check that the assets and es folders are next to bin.", true, 30.0f);
+}
+
+void EngineSimApplication::reloadCurrentEngine() {
+    if (!m_simple.currentEnginePath.empty()) {
+        loadEngineFromFile(m_simple.currentEnginePath, true);
+    }
+    else {
+        loadMainScript(true);
+    }
+}
+
+void EngineSimApplication::buildCustomEngine() {
+    EngineBuilder::sanitize(&m_simple.builder);
+    m_settings.set("builder", EngineBuilder::serialize(m_simple.builder));
+
+    std::string error;
+    const std::string relative = EngineLibrary::saveCustomEngine(
+        m_assetPath,
+        EngineBuilder::fileStem(m_simple.builder),
+        EngineBuilder::generateScript(m_simple.builder),
+        &error);
+
+    if (relative.empty()) {
+        m_simple.showMessage(error, true, 10.0f);
+        return;
+    }
+
+    m_simple.overlay = SimpleOverlay::None;
+    if (loadEngineFromFile(relative, true)) {
+        m_simple.showMessage(
+            "Built your " + EngineBuilder::engineName(m_simple.builder) + "!  Hold START to start it.", false, 8.0f);
+    }
+}
+
+void EngineSimApplication::openEnginePicker() {
+    m_simple.engines = EngineLibrary::scan(m_assetPath);
+    m_simple.enginesPage = 0;
+    for (size_t i = 0; i < m_simple.engines.size(); ++i) {
+        if (m_simple.engines[i].relativePath == m_simple.currentEnginePath) {
+            m_simple.enginesPage = (int)i / 12;
+            break;
+        }
+    }
+
+    m_simple.overlay = SimpleOverlay::Engines;
+}
+
+void EngineSimApplication::setViewMode(int mode) {
+    m_screen = mode;
+    m_simple.viewMode = mode;
+    m_settings.setInt("view", mode);
+    m_settings.save();
+}
+
+void EngineSimApplication::applyVolume() {
+    if (m_simulator == nullptr) return;
+
+    Synthesizer::AudioParameters audioParams = m_simulator->synthesizer().getAudioParameters();
+    audioParams.volume = static_cast<float>(m_simple.volume);
+    m_simulator->synthesizer().setAudioParameters(audioParams);
+}
+
+void EngineSimApplication::toggleIgnition() {
+    if (m_simulator == nullptr || m_simulator->getEngine() == nullptr) return;
+
+    IgnitionModule *ignition = m_simulator->getEngine()->getIgnitionModule();
+    ignition->m_enabled = !ignition->m_enabled;
+    m_infoCluster->setLogMessage(ignition->m_enabled ? "IGNITION ENABLED" : "IGNITION DISABLED");
+}
+
+void EngineSimApplication::toggleDyno() {
+    if (m_simulator == nullptr) return;
+
+    m_simulator->m_dyno.m_enabled = !m_simulator->m_dyno.m_enabled;
+    m_infoCluster->setLogMessage(m_simulator->m_dyno.m_enabled ? "DYNOMOMETER ENABLED" : "DYNOMOMETER DISABLED");
+}
+
+void EngineSimApplication::shiftUp() {
+    if (m_simulator == nullptr) return;
+
+    m_simulator->getTransmission()->changeGear(m_simulator->getTransmission()->getGear() + 1);
+    m_infoCluster->setLogMessage(
+        "UPSHIFTED TO " + std::to_string(m_simulator->getTransmission()->getGear() + 1));
+}
+
+void EngineSimApplication::shiftDown() {
+    if (m_simulator == nullptr) return;
+
+    m_simulator->getTransmission()->changeGear(m_simulator->getTransmission()->getGear() - 1);
+    if (m_simulator->getTransmission()->getGear() != -1) {
+        m_infoCluster->setLogMessage(
+            "DOWNSHIFTED TO " + std::to_string(m_simulator->getTransmission()->getGear() + 1));
+    }
+    else {
+        m_infoCluster->setLogMessage("SHIFTED TO NEUTRAL");
+    }
+}
+
+void EngineSimApplication::updateSimpleState() {
+    const bool hasEngine = m_simulator != nullptr && m_iceEngine != nullptr;
+
+    m_simple.ignitionOn = hasEngine && m_iceEngine->getIgnitionModule()->m_enabled;
+    m_simple.dynoOn = hasEngine && m_simulator->m_dyno.m_enabled;
+    m_simple.gear = hasEngine ? m_simulator->getTransmission()->getGear() : -1;
+    m_simple.rpm = hasEngine ? m_iceEngine->getRpm() : 0.0;
+    m_simple.redlineRpm = hasEngine ? units::toRpm(m_iceEngine->getRedline()) : 0.0;
+    m_simple.engineName = hasEngine ? m_iceEngine->getName() : "";
+    m_simple.viewMode = m_screen;
+
+    // In the simple view the info panel is hidden, so show its messages in
+    // the banner instead (except the constant throttle updates).
+    if (m_infoCluster != nullptr) {
+        const std::string log = m_infoCluster->getLogMessage();
+        if (log != m_lastInfoMessage) {
+            m_lastInfoMessage = log;
+            if (m_screen != 0 && log.rfind("Throttle", 0) != 0) {
+                m_simple.showMessage(log, false, 2.5f);
+            }
+        }
+    }
+}
+
+void EngineSimApplication::processSimpleCommands() {
+    std::vector<SimpleCommand> commands;
+    commands.swap(m_simple.commands);
+
+    using T = SimpleCommand::Type;
+    for (const SimpleCommand &command : commands) {
+        switch (command.type) {
+        case T::ToggleIgnition: toggleIgnition(); break;
+        case T::GearUp: shiftUp(); break;
+        case T::GearDown: shiftDown(); break;
+        case T::ToggleDyno: toggleDyno(); break;
+        case T::OpenHelp: m_simple.overlay = SimpleOverlay::Help; break;
+        case T::OpenEngines: openEnginePicker(); break;
+        case T::OpenBuilder: m_simple.overlay = SimpleOverlay::Builder; break;
+        case T::CloseOverlay:
+            if (m_simple.overlay == SimpleOverlay::Help) {
+                m_settings.setBool("help_seen", true);
+                m_settings.save();
+            }
+            m_simple.overlay = SimpleOverlay::None;
+            break;
+        case T::CycleView:
+            // Simple -> Detailed -> Engine only -> Simple
+            if (m_screen == 2) setViewMode(0);
+            else if (m_screen == 0) setViewMode(1);
+            else setViewMode(2);
+            break;
+        case T::LoadEngine:
+            if (command.a >= 0 && command.a < (int)m_simple.engines.size()) {
+                m_simple.overlay = SimpleOverlay::None;
+                loadEngineFromFile(m_simple.engines[command.a].relativePath, true);
+            }
+            break;
+        case T::EditCustomEngine:
+            if (command.a >= 0 && command.a < (int)m_simple.engines.size()) {
+                const std::string path = m_assetPath + "/" + m_simple.engines[command.a].relativePath;
+                if (EngineBuilder::deserialize(EngineLibrary::firstLine(path), &m_simple.builder)) {
+                    m_simple.overlay = SimpleOverlay::Builder;
+                }
+                else {
+                    m_simple.showMessage("That engine was not made with the builder, so it can't be edited here.", true, 6.0f);
+                }
+            }
+            break;
+        case T::BuilderAdjust:
+            EngineBuilder::adjust(&m_simple.builder, command.a, command.b);
+            m_settings.set("builder", EngineBuilder::serialize(m_simple.builder));
+            break;
+        case T::BuildEngine: buildCustomEngine(); break;
+        case T::EnginesPage: m_simple.enginesPage += command.a; break;
+        case T::ReloadEngine: reloadCurrentEngine(); break;
+        }
+    }
+}
+
+void EngineSimApplication::ensureVehicleAndTransmission(Vehicle **vehicleOut, Transmission **transmissionOut) {
+    Vehicle *vehicle = *vehicleOut;
+    Transmission *transmission = *transmissionOut;
 
     if (vehicle == nullptr) {
         Vehicle::Parameters vehParams;
@@ -663,8 +1001,8 @@ void EngineSimApplication::loadScript() {
         transmission->initialize(tParams);
     }
 
-    loadEngine(engine, vehicle, transmission);
-    refreshUserInterface();
+    *vehicleOut = vehicle;
+    *transmissionOut = transmission;
 }
 
 void EngineSimApplication::processEngineInput() {
@@ -691,7 +1029,9 @@ void EngineSimApplication::processEngineInput() {
         m_simulator->synthesizer().setAudioParameters(audioParams);
         fineControlInUse = true;
 
-        m_infoCluster->setLogMessage("[Z] - Set volume to " + std::to_string(audioParams.volume));
+        m_simple.volume = audioParams.volume;
+        m_settings.setDouble("volume", m_simple.volume);
+        m_infoCluster->setLogMessage("[Z] - Set volume to " + std::to_string((int)std::round(audioParams.volume * 100)) + "%");
     }
     else if (m_engine.IsKeyDown(ysKey::Code::X)) {
         const double rate = fineControlMode
@@ -773,8 +1113,17 @@ void EngineSimApplication::processEngineInput() {
         fineControlInUse = true;
     }
 
+    // Simple Edition: the on-screen volume slider
+    if (m_simple.volumeChanged) {
+        m_simple.volumeChanged = false;
+        applyVolume();
+        m_settings.setDouble("volume", m_simple.volume);
+    }
+
+    // Simple Edition: the on-screen throttle slider sets the resting throttle;
+    // the Q/W/E/R keys still override it while held.
     const double prevTargetThrottle = m_targetSpeedSetting;
-    m_targetSpeedSetting = fineControlMode ? m_targetSpeedSetting : 0.0;
+    m_targetSpeedSetting = fineControlMode ? m_targetSpeedSetting : m_simple.throttle;
     if (m_engine.IsKeyDown(ysKey::Code::Q)) {
         m_targetSpeedSetting = 0.01;
     }
@@ -792,7 +1141,8 @@ void EngineSimApplication::processEngineInput() {
     }
 
     if (prevTargetThrottle != m_targetSpeedSetting) {
-        m_infoCluster->setLogMessage("Speed control set to " + std::to_string(m_targetSpeedSetting));
+        m_infoCluster->setLogMessage(
+            "Throttle " + std::to_string((int)std::round(m_targetSpeedSetting * 100)) + "%");
     }
 
     m_speedSetting = m_targetSpeedSetting * 0.5 + 0.5 * m_speedSetting;
@@ -857,8 +1207,13 @@ void EngineSimApplication::processEngineInput() {
     m_simulator->m_dyno.m_rotationSpeed = m_dynoSpeed;
 
     const bool prevStarterEnabled = m_simulator->m_starterMotor.m_enabled;
-    if (m_engine.IsKeyDown(ysKey::Code::S)) {
+    if (m_engine.IsKeyDown(ysKey::Code::S) || m_simple.starterHeld) {
         m_simulator->m_starterMotor.m_enabled = true;
+
+        // Simple Edition: the START button also switches the ignition on
+        if (m_simple.starterHeld && !m_iceEngine->getIgnitionModule()->m_enabled) {
+            m_iceEngine->getIgnitionModule()->m_enabled = true;
+        }
     }
     else {
         m_simulator->m_starterMotor.m_enabled = false;
@@ -941,8 +1296,13 @@ void EngineSimApplication::renderScene() {
 
     m_shaders.CalculateUiCamera(screenWidth, screenHeight);
 
+    // Simple Edition: reserve a strip at the bottom for the control bar
+    const float barHeight = (float)std::max(56, std::min(84, screenHeight / 13));
+    const Bounds contentBounds(
+        (float)screenWidth, (float)screenHeight - barHeight, { 0, (float)screenHeight });
+
     if (m_screen == 0) {
-        Bounds windowBounds((float)screenWidth, (float)screenHeight, { 0, (float)screenHeight });
+        Bounds windowBounds = contentBounds;
         Grid grid;
         grid.v_cells = 2;
         grid.h_cells = 3;
@@ -975,7 +1335,7 @@ void EngineSimApplication::renderScene() {
         m_oscCluster->activate();
     }
     else if (m_screen == 1) {
-        Bounds windowBounds((float)screenWidth, (float)screenHeight, { 0, (float)screenHeight });
+        Bounds windowBounds = contentBounds;
         m_engineView->setDrawFrame(false);
         m_engineView->setBounds(windowBounds);
         m_engineView->setLocalPosition({ 0, 0 });
@@ -990,7 +1350,7 @@ void EngineSimApplication::renderScene() {
         m_infoCluster->setVisible(false);
     }
     else if (m_screen == 2) {
-        Bounds windowBounds((float)screenWidth, (float)screenHeight, { 0, (float)screenHeight });
+        Bounds windowBounds = contentBounds;
         Grid grid;
         grid.v_cells = 1;
         grid.h_cells = 3;
@@ -1003,6 +1363,33 @@ void EngineSimApplication::renderScene() {
 
         m_engineView->setVisible(true);
         m_rightGaugeCluster->setVisible(true);
+        m_oscCluster->setVisible(false);
+        m_performanceCluster->setVisible(false);
+        m_loadSimulationCluster->setVisible(false);
+        m_mixerCluster->setVisible(false);
+        m_infoCluster->setVisible(false);
+    }
+
+    // Simple Edition: control bar, message banner and full screen panels
+    if (m_controlBar != nullptr) {
+        m_controlBar->m_bounds = Bounds((float)screenWidth, barHeight, { 0.0f, barHeight }, Bounds::tl);
+        m_controlBar->setVisible(true);
+        m_controlBar->activate();
+    }
+
+    if (m_banner != nullptr) {
+        m_banner->m_bounds = contentBounds;
+        m_banner->activate();
+    }
+
+    if (m_overlay != nullptr) {
+        m_overlay->m_bounds = contentBounds;
+        m_overlay->activate();
+    }
+
+    if (isOverlayOpen()) {
+        m_engineView->setVisible(false);
+        m_rightGaugeCluster->setVisible(false);
         m_oscCluster->setVisible(false);
         m_performanceCluster->setVisible(false);
         m_loadSimulationCluster->setVisible(false);
@@ -1071,6 +1458,18 @@ void EngineSimApplication::refreshUserInterface() {
     m_performanceCluster->setSimulator(m_simulator);
     m_loadSimulationCluster->setSimulator(m_simulator);
     m_mixerCluster->setSimulator(m_simulator);
+
+    // Simple Edition
+    m_controlBar = m_uiManager.getRoot()->addElement<SimpleControlBar>();
+    m_controlBar->build(&m_simple);
+
+    m_banner = m_uiManager.getRoot()->addElement<SimpleMessageBanner>();
+    m_banner->setState(&m_simple);
+
+    m_overlay = m_uiManager.getRoot()->addElement<SimpleOverlayPanel>();
+    m_overlay->build(&m_simple);
+
+    m_lastInfoMessage = m_infoCluster->getLogMessage();
 }
 
 void EngineSimApplication::startRecording() {

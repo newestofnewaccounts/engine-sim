@@ -18,9 +18,13 @@ es_script::Compiler::Output *es_script::Compiler::output() {
     return s_output;
 }
 
-void es_script::Compiler::initialize() {
+void es_script::Compiler::initialize(const std::string &extraSearchPath) {
     m_compiler = new piranha::Compiler(&m_rules);
     m_compiler->setFileExtension(".mr");
+
+    if (!extraSearchPath.empty()) {
+        m_compiler->addSearchPath(extraSearchPath.c_str());
+    }
 
     m_compiler->addSearchPath("../../es/");
     m_compiler->addSearchPath("../es/");

@@ -31,7 +31,9 @@ namespace es_script {
 
         static Output *output();
 
-        void initialize();
+        // extraSearchPath: folder containing the engine-sim script library
+        // ("es"), used when the app is not started from its bin folder.
+        void initialize(const std::string &extraSearchPath = "");
         bool compile(const piranha::IrPath &path);
         Output execute();
         void destroy();

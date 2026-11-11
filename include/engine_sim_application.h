@@ -22,6 +22,8 @@
 #include "info_cluster.h"
 #include "application_settings.h"
 #include "transmission.h"
+#include "simple_ui.h"
+#include "app_settings_store.h"
 
 #include "delta.h"
 #include "dtv.h"
@@ -94,6 +96,38 @@ class EngineSimApplication {
         void renderScene();
 
         void refreshUserInterface();
+
+        // Simple Edition
+        bool compileEngineScript(
+            const std::string &path,
+            Engine **engine,
+            Vehicle **vehicle,
+            Transmission **transmission,
+            std::string *error);
+        void ensureVehicleAndTransmission(Vehicle **vehicle, Transmission **transmission);
+        void installEngine(Engine *engine, Vehicle *vehicle, Transmission *transmission);
+        bool loadEngineFromFile(const std::string &relativePath, bool showErrors);
+        bool loadMainScript(bool showErrors);
+        void loadStartupEngine();
+        void reloadCurrentEngine();
+        void buildCustomEngine();
+        void openEnginePicker();
+        void processSimpleCommands();
+        void updateSimpleState();
+        void setViewMode(int mode);
+        void applyVolume();
+        void toggleIgnition();
+        void toggleDyno();
+        void shiftUp();
+        void shiftDown();
+        bool isOverlayOpen() const { return m_simple.overlay != SimpleOverlay::None; }
+
+        SimpleUiState m_simple;
+        AppSettingsStore m_settings;
+        SimpleControlBar *m_controlBar;
+        SimpleMessageBanner *m_banner;
+        SimpleOverlayPanel *m_overlay;
+        std::string m_lastInfoMessage;
 
     protected:
         double m_speedSetting = 1.0;

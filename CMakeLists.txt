@@ -238,6 +238,12 @@ add_executable(engine-sim-app WIN32
     src/mixer_cluster.cpp
     src/info_cluster.cpp
 
+    # Simple Edition
+    src/engine_builder.cpp
+    src/engine_library.cpp
+    src/simple_ui.cpp
+    src/app_settings_store.cpp
+
     # Include files
     include/delta.h
     include/dtv.h
@@ -272,11 +278,38 @@ add_executable(engine-sim-app WIN32
     include/load_simulation_cluster.h
     include/mixer_cluster.h
     include/info_cluster.h
+
+    # Simple Edition
+    include/engine_builder.h
+    include/engine_library.h
+    include/simple_ui.h
+    include/app_settings_store.h
 )
 
 target_link_libraries(engine-sim-app
     engine-sim
 )
+
+# Simple Edition: command-line checker that loads every engine and simulates
+# engine-builder engines (used by the cloud build).
+if (PIRANHA_ENABLED)
+    add_executable(engine-sim-check
+        tools/engine_check.cpp
+        src/engine_builder.cpp
+        src/engine_library.cpp
+
+        include/engine_builder.h
+        include/engine_library.h
+    )
+
+    target_link_libraries(engine-sim-check
+        engine-sim
+        engine-sim-script-interpreter
+    )
+
+    target_include_directories(engine-sim-check
+        PUBLIC dependencies/submodules)
+endif (PIRANHA_ENABLED)
 
 if (DTV)
     target_link_libraries(engine-sim-app
