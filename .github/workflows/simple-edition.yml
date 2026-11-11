@@ -52,6 +52,13 @@ jobs:
             Write-Host "No bundle to unpack"
           }
 
+      # Newer Boost removed path::is_complete(); is_absolute() is the same check
+      - name: Patch dependencies for current Boost
+        shell: pwsh
+        run: |
+          $f = 'dependencies/submodules/piranha/src/path.cpp'
+          (Get-Content $f -Raw) -replace 'is_complete\(\)', 'is_absolute()' | Set-Content $f -NoNewline
+
       - name: Install Flex and Bison
         run: choco install winflexbison3 -y --no-progress
 
