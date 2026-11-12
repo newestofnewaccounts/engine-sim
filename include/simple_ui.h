@@ -35,7 +35,8 @@ struct SimpleCommand {
         StudioMode,       // a = SoundStudio::Mode
         StudioRpmStep,    // a = rpm change (+/-)
         ToggleRecord,
-        OpenRecordings
+        OpenRecordings,
+        ToggleTheme
     };
 
     Type type;
@@ -64,6 +65,11 @@ struct SimpleUiState {
     int gear = -1;
     double rpm = 0;
     double redlineRpm = 0;
+    int gearCount = 6;
+    double speedMph = 0;
+    double throttleActual = 0;
+    double powerHp = 0;
+    double torqueLbFt = 0;
     int viewMode = 2;
     std::string engineName;
 
@@ -119,6 +125,8 @@ public:
     bool m_enabled;
     ysVector m_activeColor;
     bool m_useActiveColor;
+    bool m_alignLeft;   // text on the left (list rows)
+    bool m_quiet;       // same colour as the card until hovered/active
 };
 
 class SimpleSlider : public UiElement {
@@ -169,8 +177,24 @@ protected:
     SimpleButton *m_view;
     SimpleButton *m_help;
     SimpleButton *m_studio;
+    SimpleButton *m_theme;
 
     Bounds m_gearBounds;
+};
+
+// The main dashboard card in the simple view: big rpm, arc gauge, gear, stats
+class SimpleDashboard : public UiElement {
+public:
+    SimpleDashboard();
+    virtual ~SimpleDashboard();
+
+    void setState(SimpleUiState *state) { m_state = state; }
+    virtual void render();
+
+protected:
+    void renderStat(const Bounds &b, const std::string &label, const std::string &value, const std::string &unit);
+
+    SimpleUiState *m_state;
 };
 
 class SimpleStudioPanel : public UiElement {

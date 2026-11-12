@@ -26,6 +26,7 @@
 #include "app_settings_store.h"
 #include "sound_studio.h"
 #include "wav_recorder.h"
+#include "ui_theme.h"
 
 #include "delta.h"
 #include "dtv.h"
@@ -92,6 +93,10 @@ class EngineSimApplication {
         InfoCluster *getInfoCluster() { return m_infoCluster; }
         ApplicationSettings* getAppSettings() { return &m_applicationSettings; }
 
+        // Simple Edition: dark / light theme
+        const UiTheme &getTheme() const { return m_theme; }
+        void setDarkTheme(bool dark);
+
     protected:
         void loadScript();
         void processEngineInput();
@@ -140,6 +145,11 @@ class EngineSimApplication {
         SoundStudio m_studio;
         WavRecorder m_recorder;
         SimpleStudioPanel *m_studioPanel;
+        SimpleDashboard *m_dashboard;
+
+        // Theme
+        void applyThemeColors();
+        UiTheme m_theme;
 
     protected:
         double m_speedSetting = 1.0;

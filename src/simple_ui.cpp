@@ -40,6 +40,8 @@ SimpleButton::SimpleButton() {
     m_enabled = true;
     m_useActiveColor = false;
     m_activeColor = ysMath::LoadVector(0.0f, 0.0f, 0.0f, 0.0f);
+    m_alignLeft = false;
+    m_quiet = false;
 }
 
 SimpleButton::~SimpleButton() {
@@ -52,23 +54,29 @@ void SimpleButton::update(float dt) {
 }
 
 void SimpleButton::render() {
-    const ysVector background = m_app->getBackgroundColor();
-    const ysVector foreground = m_app->getForegroundColor();
-    const ysVector accent = m_useActiveColor ? m_activeColor : m_app->getGreen();
+    const UiTheme &theme = m_app->getTheme();
 
-    ysVector fill = background;
+    ysVector fill = m_quiet ? theme.card : theme.control;
+    ysVector textColor = m_enabled ? theme.text : theme.textMuted;
     if (m_active) {
-        fill = mix(background, accent, 0.45f);
+        fill = m_useActiveColor ? m_activeColor : theme.accent;
+        textColor = theme.accentText;
     }
 
     if (m_enabled) {
-        if (isMouseHeld()) fill = mix(fill, foreground, 0.25f);
-        else if (isMouseOver()) fill = mix(fill, foreground, 0.12f);
+        if (isMouseHeld()) fill = mix(fill, theme.text, 0.16f);
+        else if (isMouseOver()) fill = mix(fill, theme.text, 0.07f);
     }
 
-    const ysVector frame = m_enabled ? foreground : mix(background, foreground, 0.35f);
-    drawFrame(m_bounds, 1.0f, frame, fill);
-    drawCenteredText(m_text, m_bounds, m_fontSize, Bounds::center);
+    const float radius = std::min(12.0f, m_bounds.height() * 0.3f);
+    drawRoundedBox(m_bounds, radius, fill);
+
+    if (m_alignLeft) {
+        drawTextColored(m_text, m_bounds.inset(16.0f), m_fontSize, Bounds::lm, Bounds::lm, textColor);
+    }
+    else {
+        drawCenteredTextColored(m_text, m_bounds, m_fontSize, textColor);
+    }
 
     UiElement::render();
 }
@@ -99,23 +107,26 @@ void SimpleSlider::update(float dt) {
 }
 
 void SimpleSlider::render() {
-    const ysVector background = m_app->getBackgroundColor();
-    const ysVector foreground = m_app->getForegroundColor();
-    const double value = (m_value != nullptr) ? *m_value : 0.0;
+    const UiTheme &theme = m_app->getTheme();
+    const double value = std::min(1.0, std::max(0.0, (m_value != nullptr) ? *m_value : 0.0));
+    const float radius = std::min(12.0f, m_bounds.height() * 0.3f);
 
-    ysVector frameFill = background;
-    if (isMouseOver() || isMouseHeld()) frameFill = mix(background, foreground, 0.06f);
-    drawFrame(m_bounds, 1.0f, foreground, frameFill);
+    ysVector track = theme.control;
+    if (isMouseHeld()) track = mix(track, theme.text, 0.10f);
+    else if (isMouseOver()) track = mix(track, theme.text, 0.05f);
+    drawRoundedBox(m_bounds, radius, track);
 
-    const Bounds inner = m_bounds.inset(4.0f);
+    // Filled part, like a touchscreen slider
     if (value > 0.001) {
-        Bounds filled = inner;
-        filled.m1.x = inner.m0.x + (float)(inner.width() * std::min(1.0, std::max(0.0, value)));
-        drawBox(filled, mix(background, m_color, 0.6f));
+        Bounds filled = m_bounds;
+        filled.m1.x = m_bounds.m0.x + std::max(radius * 2, (float)(m_bounds.width() * value));
+        drawRoundedBox(filled, radius, mix(track, m_color, theme.dark ? 0.75f : 0.55f));
     }
 
     const std::string valueText = m_format ? m_format(value) : percent(value);
-    drawCenteredText(m_label + " " + valueText, m_bounds, m_fontSize, Bounds::center);
+    const Bounds inner = m_bounds.inset(14.0f);
+    drawTextColored(m_label, inner, m_fontSize, Bounds::lm, Bounds::lm, theme.text);
+    drawTextColored(valueText, inner, m_fontSize, Bounds::rm, Bounds::rm, theme.text);
 }
 
 void SimpleSlider::onMouseDown(const Point &mouseLocal) {
@@ -151,7 +162,7 @@ void SimpleSlider::setFromX(float x) {
 SimpleControlBar::SimpleControlBar() {
     m_state = nullptr;
     m_start = m_ignition = m_gearDown = m_gearUp = m_dyno = nullptr;
-    m_engines = m_builder = m_view = m_help = m_studio = nullptr;
+    m_engines = m_builder = m_view = m_help = m_studio = m_theme = nullptr;
     m_throttle = m_volume = nullptr;
 }
 
@@ -170,35 +181,38 @@ void SimpleControlBar::build(SimpleUiState *state) {
     };
 
     using T = SimpleCommand::Type;
-    m_start = button("HOLD TO START", nullptr);
+    const UiTheme &theme = m_app->getTheme();
+
+    m_start = button("Hold to start", nullptr);
     m_start->m_useActiveColor = true;
-    m_start->m_activeColor = m_app->getOrange();
-    m_ignition = button("IGNITION", [state]() { state->push(T::ToggleIgnition); });
-    m_gearDown = button("GEAR -", [state]() { state->push(T::GearDown); });
-    m_gearUp = button("GEAR +", [state]() { state->push(T::GearUp); });
+    m_start->m_activeColor = theme.warning;
+    m_ignition = button("Ignition", [state]() { state->push(T::ToggleIgnition); });
+    m_ignition->m_useActiveColor = true;
+    m_ignition->m_activeColor = theme.success;
+    m_gearDown = button("Gear -", [state]() { state->push(T::GearDown); });
+    m_gearUp = button("Gear +", [state]() { state->push(T::GearUp); });
 
     m_throttle = addElement<SimpleSlider>();
-    m_throttle->m_label = "THROTTLE";
+    m_throttle->m_label = "Throttle";
     m_throttle->m_value = &state->throttle;
-    m_throttle->m_color = m_app->getOrange();
+    m_throttle->m_color = theme.accent;
 
-    m_dyno = button("DYNO", [state]() { state->push(T::ToggleDyno); });
-    m_dyno->m_useActiveColor = true;
-    m_dyno->m_activeColor = m_app->getBlue();
+    m_dyno = button("Dyno", [state]() { state->push(T::ToggleDyno); });
 
     m_volume = addElement<SimpleSlider>();
-    m_volume->m_label = "VOLUME";
+    m_volume->m_label = "Volume";
     m_volume->m_value = &state->volume;
     m_volume->m_changed = &state->volumeChanged;
-    m_volume->m_color = m_app->getBlue();
+    m_volume->m_color = theme.accent;
 
-    m_engines = button("ENGINES", [state]() { state->push(T::OpenEngines); });
-    m_builder = button("BUILD ENGINE", [state]() { state->push(T::OpenBuilder); });
-    m_view = button("VIEW", [state]() { state->push(T::CycleView); });
-    m_help = button("HELP", [state]() { state->push(T::OpenHelp); });
-    m_studio = button("SOUND STUDIO", [state]() { state->push(T::ToggleStudio); });
-    m_studio->m_useActiveColor = true;
-    m_studio->m_activeColor = m_app->getRed();
+    m_engines = button("Engines", [state]() { state->push(T::OpenEngines); });
+    m_builder = button("Build engine", [state]() { state->push(T::OpenBuilder); });
+    m_view = button("View", [state]() { state->push(T::CycleView); });
+    m_help = button("Help", [state]() { state->push(T::OpenHelp); });
+    m_studio = button("Sound studio", [state]() { state->push(T::ToggleStudio); });
+    m_theme = button("Light", [state]() { state->push(T::ToggleTheme); });
+
+    for (SimpleButton *b : { m_engines, m_builder, m_view, m_help, m_theme }) b->m_quiet = true;
 }
 
 void SimpleControlBar::update(float dt) {
@@ -217,18 +231,20 @@ void SimpleControlBar::update(float dt) {
         { m_volume, 1.8f },
         { m_engines, 1.2f },
         { m_builder, 1.5f },
-        { m_view, 1.4f },
-        { m_studio, 1.6f },
+        { m_view, 1.3f },
+        { m_studio, 1.5f },
+        { m_theme, 0.8f },
         { m_help, 0.8f }
     };
 
     float totalWeight = 0;
     for (const Slot &s : slots) totalWeight += s.weight;
 
-    const float padding = 6.0f;
-    const Bounds inner = m_bounds.inset(padding);
+    // A floating dock with a little space around it
+    const float padding = 8.0f;
+    const Bounds inner = m_bounds.inset(10.0f).inset(padding);
     const float available = inner.width() - padding * (float)(std::size(slots) - 1);
-    const float fontSize = std::max(12.0f, std::min(20.0f, inner.height() * 0.32f));
+    const float fontSize = std::max(13.0f, std::min(19.0f, inner.height() * 0.36f));
 
     float x = inner.left();
     for (const Slot &s : slots) {
@@ -243,7 +259,7 @@ void SimpleControlBar::update(float dt) {
         x += w + padding;
     }
 
-    for (SimpleButton *b : { m_start, m_ignition, m_gearDown, m_gearUp, m_dyno, m_engines, m_builder, m_view, m_help, m_studio }) {
+    for (SimpleButton *b : { m_start, m_ignition, m_gearDown, m_gearUp, m_dyno, m_engines, m_builder, m_view, m_help, m_studio, m_theme }) {
         b->m_fontSize = fontSize;
     }
     m_throttle->m_fontSize = fontSize;
@@ -251,22 +267,26 @@ void SimpleControlBar::update(float dt) {
 
     m_state->starterHeld = m_start->isMouseHeld();
     m_start->m_active = m_state->starterHeld;
-    m_start->m_text = m_state->starterHeld ? "STARTING..." : "HOLD TO START";
+    m_start->m_text = m_state->starterHeld ? "Starting..." : "Hold to start";
 
     m_ignition->m_active = m_state->ignitionOn;
-    m_ignition->m_text = m_state->ignitionOn ? "IGNITION: ON" : "IGNITION: OFF";
+    m_ignition->m_text = m_state->ignitionOn ? "Ignition on" : "Ignition off";
 
     m_dyno->m_active = m_state->dynoOn;
 
     switch (m_state->viewMode) {
-    case 0: m_view->m_text = "VIEW: DETAILED"; break;
-    case 1: m_view->m_text = "VIEW: ENGINE"; break;
-    default: m_view->m_text = "VIEW: SIMPLE"; break;
+    case 0: m_view->m_text = "View: Detailed"; break;
+    case 1: m_view->m_text = "View: Engine"; break;
+    default: m_view->m_text = "View: Simple"; break;
     }
+
+    m_theme->m_text = m_app->getTheme().dark ? "Light" : "Dark";
 
     m_help->m_active = m_state->overlay == SimpleOverlay::Help;
     m_studio->m_active = m_state->studioOpen;
-    m_studio->m_text = m_state->recording ? "SOUND STUDIO (REC)" : "SOUND STUDIO";
+    m_studio->m_useActiveColor = m_state->recording;
+    m_studio->m_activeColor = m_app->getTheme().danger;
+    m_studio->m_text = m_state->recording ? "Recording" : "Sound studio";
     m_engines->m_active = m_state->overlay == SimpleOverlay::Engines;
     m_builder->m_active = m_state->overlay == SimpleOverlay::Builder;
 
@@ -274,15 +294,13 @@ void SimpleControlBar::update(float dt) {
 }
 
 void SimpleControlBar::render() {
-    drawFrame(m_bounds, 1.0f, m_app->getForegroundColor(), m_app->getBackgroundColor());
+    const UiTheme &theme = m_app->getTheme();
+    drawRoundedBox(m_bounds.inset(10.0f), 18.0f, theme.card);
 
     if (m_state != nullptr) {
         const std::string gear = (m_state->gear < 0) ? "N" : std::to_string(m_state->gear + 1);
         const float h = m_gearBounds.height();
-        drawCenteredText("GEAR", m_gearBounds, std::max(10.0f, h * 0.2f), Bounds::tm);
-        Bounds gearValue = m_gearBounds;
-        gearValue.move({ 0.0f, -h * 0.12f });
-        drawCenteredText(gear, gearValue, std::max(16.0f, h * 0.45f), Bounds::center);
+        drawCenteredTextColored(gear, m_gearBounds, std::max(18.0f, h * 0.62f), theme.text);
     }
 
     UiElement::render();
@@ -310,16 +328,15 @@ void SimpleMessageBanner::update(float dt) {
 void SimpleMessageBanner::render() {
     if (m_state == nullptr || m_state->messageTimer <= 0 || m_state->message.empty()) return;
 
-    const float fontSize = 22.0f;
-    const float width = std::min(
-        m_bounds.width() - 20.0f,
-        m_app->getTextRenderer()->CalculateWidth(m_state->message, fontSize) + 40.0f);
-    const Bounds b(width, 44.0f, m_bounds.getPosition(Bounds::tm) + Point(0.0f, -10.0f), Bounds::tm);
+    // A pill-shaped toast at the top
+    const UiTheme &theme = m_app->getTheme();
+    const float fontSize = 20.0f;
+    const float width = std::min(m_bounds.width() - 20.0f, textWidth(m_state->message, fontSize) + 56.0f);
+    const Bounds b(width, 46.0f, m_bounds.getPosition(Bounds::tm) + Point(0.0f, -14.0f), Bounds::tm);
 
-    const ysVector bg = m_app->getBackgroundColor();
-    const ysVector color = m_state->messageIsError ? m_app->getRed() : m_app->getForegroundColor();
-    drawFrame(b, 2.0f, color, m_state->messageIsError ? mix(bg, m_app->getRed(), 0.3f) : bg);
-    drawCenteredText(m_state->message, b, fontSize, Bounds::center);
+    drawRoundedBox(b, 23.0f, m_state->messageIsError ? theme.danger : theme.card);
+    drawCenteredTextColored(
+        m_state->message, b, fontSize, m_state->messageIsError ? theme.accentText : theme.text);
 }
 
 // ============================================================================
@@ -347,29 +364,32 @@ void SimpleOverlayPanel::build(SimpleUiState *state) {
         return b;
     };
 
-    m_close = button("CLOSE", [state]() { state->push(T::CloseOverlay); });
+    m_close = button("Close", [state]() { state->push(T::CloseOverlay); });
 
     for (int i = 0; i < EngineRows; ++i) {
         m_engineRows[i] = button("", [state, i]() {
             state->push(T::LoadEngine, state->enginesPage * EngineRows + i);
         });
-        m_editRows[i] = button("EDIT", [state, i]() {
+        m_editRows[i] = button("Edit", [state, i]() {
             state->push(T::EditCustomEngine, state->enginesPage * EngineRows + i);
         });
     }
 
-    m_prevPage = button("< PREVIOUS", [state]() { state->push(T::EnginesPage, -1); });
-    m_nextPage = button("NEXT >", [state]() { state->push(T::EnginesPage, 1); });
-    m_openBuilder = button("BUILD YOUR OWN ENGINE", [state]() { state->push(T::OpenBuilder); });
+    m_prevPage = button("< Previous", [state]() { state->push(T::EnginesPage, -1); });
+    m_nextPage = button("Next >", [state]() { state->push(T::EnginesPage, 1); });
+    m_openBuilder = button("Build your own engine", [state]() { state->push(T::OpenBuilder); });
 
     for (int i = 0; i < SimpleUiState::BuilderRows; ++i) {
         m_builderLess[i] = button("<", [state, i]() { state->push(T::BuilderAdjust, i, -1); });
         m_builderMore[i] = button(">", [state, i]() { state->push(T::BuilderAdjust, i, 1); });
     }
 
-    m_build = button("BUILD & START", [state]() { state->push(T::BuildEngine); });
+    m_build = button("Build and start", [state]() { state->push(T::BuildEngine); });
     m_build->m_active = true;
-    m_cancel = button("CANCEL", [state]() { state->push(T::CloseOverlay); });
+    m_cancel = button("Cancel", [state]() { state->push(T::CloseOverlay); });
+
+    m_close->m_quiet = true;
+    for (int i = 0; i < EngineRows; ++i) m_engineRows[i]->m_alignLeft = true;
 
     hideAll();
 }
@@ -412,11 +432,12 @@ void SimpleOverlayPanel::update(float dt) {
 void SimpleOverlayPanel::render() {
     if (m_state == nullptr || m_state->overlay == SimpleOverlay::None) return;
 
-    // Dim everything behind the panel
-    drawBox(m_bounds, m_app->getBackgroundColor());
+    // Cover everything behind the panel, then a rounded card
+    const UiTheme &theme = m_app->getTheme();
+    drawBox(m_bounds, theme.page);
 
     const Bounds panel = panelBounds();
-    drawFrame(panel, 2.0f, m_app->getForegroundColor(), m_app->getBackgroundColor());
+    drawRoundedBox(panel, 22.0f, theme.card);
 
     switch (m_state->overlay) {
     case SimpleOverlay::Help: renderHelp(panel); break;
@@ -438,18 +459,20 @@ void SimpleOverlayPanel::renderHelp(const Bounds &panel) {
     const float left = panel.left() + 30.0f;
     float y = panel.top() - 30.0f;
 
-    drawAlignedText("HOW TO USE ENGINE SIMULATOR", box(left, y, 600.0f, 40.0f), 34.0f, Bounds::tl, Bounds::tl);
+    const UiTheme &theme = m_app->getTheme();
+    drawAlignedText("How to use Engine Simulator", box(left, y, 700.0f, 40.0f), 34.0f, Bounds::tl, Bounds::tl);
     y -= 60.0f;
 
     const char *steps[] = {
-        "1.  Hold HOLD TO START until the engine runs (ignition turns on by itself).",
-        "2.  Drag THROTTLE to rev the engine. Drag it back to the left to idle.",
-        "3.  Use GEAR + and GEAR - to drive. N means neutral.",
-        "4.  ENGINES lets you pick a different engine.",
-        "5.  BUILD ENGINE lets you design your own engine in a few clicks.",
-        "6.  DYNO measures power and torque. VIEW switches simple / detailed screens.",
+        "1.  Hold Hold to start until the engine runs (the ignition turns on by itself).",
+        "2.  Drag Throttle to rev the engine. Drag it back to the left to idle.",
+        "3.  Use Gear + and Gear - to drive. N means neutral.",
+        "4.  Engines lets you pick a different engine.",
+        "5.  Build engine lets you design your own engine in a few clicks.",
+        "6.  Dyno measures power and torque. View switches between simple and detailed screens.",
         "7.  Drag the engine picture to move it, scroll over it to zoom.",
-        "8.  SOUND STUDIO holds one sound (idle, cruise, overrun, redline...) and records WAV files."
+        "8.  Sound studio holds one sound (idle, cruise, overrun, redline...) and records WAV files.",
+        "9.  Light / Dark switches the colour theme."
     };
     for (const char *s : steps) {
         drawAlignedText(s, box(left, y, panel.width() - 60.0f, 28.0f), 20.0f, Bounds::tl, Bounds::tl);
@@ -457,7 +480,7 @@ void SimpleOverlayPanel::renderHelp(const Bounds &panel) {
     }
 
     y -= 20.0f;
-    drawAlignedText("KEYBOARD SHORTCUTS", box(left, y, 600.0f, 32.0f), 26.0f, Bounds::tl, Bounds::tl);
+    drawAlignedText("Keyboard shortcuts", box(left, y, 600.0f, 32.0f), 26.0f, Bounds::tl, Bounds::tl);
     y -= 44.0f;
 
     const char *keys[][2] = {
@@ -486,7 +509,7 @@ void SimpleOverlayPanel::renderHelp(const Bounds &panel) {
         const float cx = left + column * columnWidth;
         const float cy = top - (i % perColumn) * 30.0f;
         drawAlignedText(keys[i][0], box(cx, cy, 220.0f, 26.0f), 18.0f, Bounds::tl, Bounds::tl);
-        drawAlignedText(keys[i][1], box(cx + 230.0f, cy, columnWidth - 240.0f, 26.0f), 18.0f, Bounds::tl, Bounds::tl);
+        drawTextColored(keys[i][1], box(cx + 230.0f, cy, columnWidth - 240.0f, 26.0f), 18.0f, Bounds::tl, Bounds::tl, theme.textMuted);
     }
 }
 
@@ -514,7 +537,7 @@ void SimpleOverlayPanel::layoutEngines(const Bounds &panel) {
 
         m_engineRows[i]->setVisible(true);
         m_engineRows[i]->m_bounds = box(left, rowTop, width - editWidth - (entry.custom ? 8.0f : 0.0f), rowHeight);
-        m_engineRows[i]->m_text = (entry.custom ? "[MY ENGINE]  " : "") + entry.name + (current ? "   (running)" : "");
+        m_engineRows[i]->m_text = (entry.custom ? "My engine:  " : "") + entry.name + (current ? "   (running)" : "");
         m_engineRows[i]->m_active = current;
         m_engineRows[i]->m_fontSize = 19.0f;
 
@@ -538,7 +561,7 @@ void SimpleOverlayPanel::layoutEngines(const Bounds &panel) {
 
 void SimpleOverlayPanel::renderEngines(const Bounds &panel) {
     const float left = panel.left() + 30.0f;
-    drawAlignedText("CHOOSE AN ENGINE", box(left, panel.top() - 30.0f, 600.0f, 40.0f), 34.0f, Bounds::tl, Bounds::tl);
+    drawAlignedText("Choose an engine", box(left, panel.top() - 30.0f, 600.0f, 40.0f), 34.0f, Bounds::tl, Bounds::tl);
 
     const int total = (int)m_state->engines.size();
     const int pages = std::max(1, (total + EngineRows - 1) / EngineRows);
@@ -615,7 +638,8 @@ void SimpleOverlayPanel::renderBuilder(const Bounds &panel) {
     const EngineBuilderSettings &s = m_state->builder;
     const float left = panel.left() + 30.0f;
 
-    drawAlignedText("BUILD YOUR OWN ENGINE", box(left, panel.top() - 30.0f, 700.0f, 40.0f), 34.0f, Bounds::tl, Bounds::tl);
+    const UiTheme &theme = m_app->getTheme();
+    drawAlignedText("Build your own engine", box(left, panel.top() - 30.0f, 700.0f, 40.0f), 34.0f, Bounds::tl, Bounds::tl);
 
     const float top = panel.top() - 100.0f;
     const float rowHeight = 50.0f;
@@ -624,11 +648,11 @@ void SimpleOverlayPanel::renderBuilder(const Bounds &panel) {
 
     for (int i = 0; i < SimpleUiState::BuilderRows; ++i) {
         const float rowTop = top - i * (rowHeight + 10.0f);
-        drawAlignedText(builderRowLabel(i), box(left, rowTop, labelWidth, rowHeight), 22.0f, Bounds::lm, Bounds::lm);
+        drawTextColored(builderRowLabel(i), box(left, rowTop, labelWidth, rowHeight), 22.0f, Bounds::lm, Bounds::lm, theme.textMuted);
 
         const Bounds valueBox = box(left + labelWidth + 61.0f, rowTop, valueWidth, rowHeight);
-        drawFrame(valueBox, 1.0f, mix(m_app->getBackgroundColor(), m_app->getForegroundColor(), 0.4f), m_app->getBackgroundColor());
-        drawCenteredText(builderRowValue(i), valueBox, 22.0f, Bounds::center);
+        drawRoundedBox(valueBox, 12.0f, theme.control);
+        drawCenteredTextColored(builderRowValue(i), valueBox, 22.0f, theme.text);
     }
 
     // Summary
@@ -645,9 +669,9 @@ void SimpleOverlayPanel::renderBuilder(const Bounds &panel) {
     drawAlignedText(
         EngineBuilder::engineName(s) + "    Bore " + fixed(bore, 1) + " mm  x  Stroke " + fixed(stroke, 1) + " mm    Firing order " + firing,
         box(left, infoTop, panel.width() - 60.0f, 30.0f), 20.0f, Bounds::tl, Bounds::tl);
-    drawAlignedText(
-        "Your engine is saved under ENGINES as [MY ENGINE], so you can play it again later.",
-        box(left, infoTop - 36.0f, panel.width() - 60.0f, 30.0f), 18.0f, Bounds::tl, Bounds::tl);
+    drawTextColored(
+        "Your engine is saved under Engines as \"My engine\", so you can play it again later.",
+        box(left, infoTop - 36.0f, panel.width() - 60.0f, 30.0f), 18.0f, Bounds::tl, Bounds::tl, theme.textMuted);
 }
 
 // ============================================================================
@@ -675,9 +699,10 @@ void SimpleStudioPanel::build(SimpleUiState *state) {
         return b;
     };
 
+    const UiTheme &theme = m_app->getTheme();
+
     for (int i = 0; i < ModeButtons; ++i) {
-        std::string name = SoundStudio::modeName((SoundStudio::Mode)i);
-        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return (char)std::toupper(c); });
+        const std::string name = SoundStudio::modeName((SoundStudio::Mode)i);
         m_modes[i] = button(name, [state, i]() { state->push(T::StudioMode, i); });
     }
 
@@ -685,22 +710,22 @@ void SimpleStudioPanel::build(SimpleUiState *state) {
     m_rpmUp = button("+100", [state]() { state->push(T::StudioRpmStep, 100); });
 
     m_target = addElement<SimpleSlider>();
-    m_target->m_label = "TARGET";
+    m_target->m_label = "Target";
     m_target->m_value = &state->studioTargetNorm;
-    m_target->m_color = m_app->getBlue();
+    m_target->m_color = theme.accent;
     m_target->m_format = [state](double) {
-        return std::to_string((int)std::round(state->studioTargetRpm)) + " RPM";
+        return std::to_string((int)std::round(state->studioTargetRpm)) + " rpm";
     };
 
     m_load = addElement<SimpleSlider>();
-    m_load->m_label = "LOAD";
+    m_load->m_label = "Load";
     m_load->m_value = &state->studioLoad;
-    m_load->m_color = m_app->getOrange();
+    m_load->m_color = theme.accent;
 
-    m_record = button("RECORD", [state]() { state->push(T::ToggleRecord); });
+    m_record = button("Record", [state]() { state->push(T::ToggleRecord); });
     m_record->m_useActiveColor = true;
-    m_record->m_activeColor = m_app->getRed();
-    m_openFolder = button("OPEN FOLDER", [state]() { state->push(T::OpenRecordings); });
+    m_record->m_activeColor = theme.danger;
+    m_openFolder = button("Open folder", [state]() { state->push(T::OpenRecordings); });
 }
 
 void SimpleStudioPanel::update(float dt) {
@@ -762,12 +787,12 @@ void SimpleStudioPanel::update(float dt) {
     if (m_state->recording) {
         const int tenths = (int)(m_state->recordSeconds * 10);
         const int seconds = (tenths / 10) % 60;
-        m_record->m_text = "STOP  " + std::to_string(tenths / 600) + ":"
+        m_record->m_text = "Stop   " + std::to_string(tenths / 600) + ":"
             + (seconds < 10 ? "0" : "") + std::to_string(seconds)
             + "." + std::to_string(tenths % 10);
     }
     else {
-        m_record->m_text = "RECORD";
+        m_record->m_text = "Record";
     }
 
     for (SimpleButton *b : { m_rpmDown, m_rpmUp, m_record, m_openFolder }) b->m_fontSize = fontSize;
@@ -782,54 +807,196 @@ void SimpleStudioPanel::update(float dt) {
 void SimpleStudioPanel::render() {
     if (m_state == nullptr) return;
 
-    const ysVector bg = m_app->getBackgroundColor();
-    const ysVector fg = m_app->getForegroundColor();
-    drawFrame(m_bounds, 1.0f, fg, bg);
+    const UiTheme &theme = m_app->getTheme();
+    drawRoundedBox(m_bounds.inset(6.0f), 20.0f, theme.card);
 
     const Bounds inner = m_bounds.inset(16.0f);
-    drawAlignedText("SOUND STUDIO", box(inner.left(), inner.top(), inner.width(), 32.0f), 28.0f, Bounds::tl, Bounds::tl);
+    drawAlignedText("Sound studio", box(inner.left(), inner.top(), inner.width(), 32.0f), 28.0f, Bounds::tl, Bounds::tl);
 
     // Big rpm readout
     const SoundStudio::Mode mode = (SoundStudio::Mode)m_state->studioMode;
-    drawFrame(m_rpmBox, 1.0f, mix(bg, fg, 0.3f), bg);
-    const Bounds readout = m_rpmBox.inset(14.0f);
-    const float big = std::min(72.0f, m_rpmBox.height() * 0.62f);
-    drawAlignedText(std::to_string((int)std::round(m_state->rpm)) + " RPM", readout, big, Bounds::lm, Bounds::lm);
+    const Bounds readout = m_rpmBox.inset(4.0f);
+    const float big = std::min(84.0f, m_rpmBox.height() * 0.7f);
+    const std::string rpmText = std::to_string((int)std::round(m_state->rpm));
+    drawAlignedText(rpmText, readout, big, Bounds::lm, Bounds::lm);
+    drawTextColored(
+        "rpm",
+        readout.inset(0.0f).move({ textWidth(rpmText, big) + 12.0f, -big * 0.18f }),
+        22.0f, Bounds::lm, Bounds::lm, theme.textMuted);
 
+    // Status pill: green when steady
     std::string status;
-    if (mode == SoundStudio::Mode::Off) status = "DRIVING";
-    else if (m_state->studioSteady) status = "STEADY";
-    else status = "SETTLING...";
-    drawAlignedText(status, readout, 20.0f, Bounds::tr, Bounds::tr);
+    ysVector statusColor = theme.control;
+    ysVector statusText = theme.text;
+    if (mode == SoundStudio::Mode::Off) {
+        status = "Driving";
+    }
+    else if (m_state->studioSteady) {
+        status = "Steady";
+        statusColor = theme.success;
+        statusText = theme.accentText;
+    }
+    else {
+        status = "Settling";
+        statusColor = theme.warning;
+        statusText = ysColor::srgbiToLinear(0x171A20);
+    }
+    const float pillW = textWidth(status, 18.0f) + 32.0f;
+    const Bounds pill(pillW, 34.0f, readout.getPosition(Bounds::tr), Bounds::tr);
+    drawRoundedBox(pill, 17.0f, statusColor);
+    drawCenteredTextColored(status, pill, 18.0f, statusText);
 
     std::string target;
     if (SoundStudio::usesTargetRpm(mode)) {
-        target = "TARGET " + std::to_string((int)std::round(m_state->studioTargetRpm));
+        target = "Target " + std::to_string((int)std::round(m_state->studioTargetRpm)) + " rpm";
     }
     else if (mode == SoundStudio::Mode::Redline || mode == SoundStudio::Mode::Limiter) {
-        target = "REDLINE " + std::to_string((int)std::round(m_state->redlineRpm));
+        target = "Redline " + std::to_string((int)std::round(m_state->redlineRpm)) + " rpm";
     }
     if (!target.empty()) {
-        drawAlignedText(target, readout, 18.0f, Bounds::br, Bounds::br);
+        drawTextColored(target, readout, 18.0f, Bounds::br, Bounds::br, theme.textMuted);
     }
 
-    drawAlignedText("MODE", m_modeLabel, 18.0f, Bounds::lm, Bounds::lm);
-    drawAlignedText(
-        SoundStudio::usesTargetRpm(mode) ? "TARGET RPM" : "TARGET RPM (CRUISE, WIDE OPEN, OVERRUN)",
-        m_targetLabel, 18.0f, Bounds::lm, Bounds::lm);
-    drawAlignedText(
-        mode == SoundStudio::Mode::Cruise ? "LOAD (THROTTLE)" : "LOAD (CRUISE ONLY)",
-        m_loadLabel, 18.0f, Bounds::lm, Bounds::lm);
+    drawTextColored("Mode", m_modeLabel, 18.0f, Bounds::lm, Bounds::lm, theme.textMuted);
+    drawTextColored(
+        SoundStudio::usesTargetRpm(mode) ? "Target rpm" : "Target rpm (Cruise, Wide open, Overrun)",
+        m_targetLabel, 18.0f, Bounds::lm, Bounds::lm, theme.textMuted);
+    drawTextColored(
+        mode == SoundStudio::Mode::Cruise ? "Load (throttle)" : "Load (Cruise only)",
+        m_loadLabel, 18.0f, Bounds::lm, Bounds::lm, theme.textMuted);
 
     // Description, last file and a hint
     float y = m_infoBox.top();
     drawAlignedText(SoundStudio::modeDescription(mode), box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl);
     y -= 28.0f;
     if (!m_state->lastRecording.empty()) {
-        drawAlignedText("Saved: " + m_state->lastRecording, box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl);
+        drawTextColored("Saved: " + m_state->lastRecording, box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl, theme.success);
         y -= 28.0f;
     }
-    drawAlignedText("WAV files go in the recordings folder next to bin.", box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl);
+    drawTextColored("WAV files go in the recordings folder next to bin.", box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl, theme.textMuted);
 
     UiElement::render();
+}
+
+// ============================================================================
+// SimpleDashboard
+
+SimpleDashboard::SimpleDashboard() {
+    m_state = nullptr;
+}
+
+SimpleDashboard::~SimpleDashboard() {
+    /* void */
+}
+
+void SimpleDashboard::renderStat(
+    const Bounds &b,
+    const std::string &label,
+    const std::string &value,
+    const std::string &unit)
+{
+    const UiTheme &theme = m_app->getTheme();
+    drawRoundedBox(b, 16.0f, theme.control);
+
+    const Bounds inner = b.inset(16.0f);
+    const float valueSize = std::min(40.0f, b.height() * 0.42f);
+    drawTextColored(label, inner, 16.0f, Bounds::tl, Bounds::tl, theme.textMuted);
+    drawAlignedText(value, inner, valueSize, Bounds::bl, Bounds::bl);
+    if (!unit.empty()) {
+        drawTextColored(
+            unit,
+            Bounds(inner).move({ textWidth(value, valueSize) + 8.0f, 0.0f }),
+            16.0f, Bounds::bl, Bounds::bl, theme.textMuted);
+    }
+}
+
+void SimpleDashboard::render() {
+    if (m_state == nullptr) return;
+
+    constexpr float Pi = 3.14159265f;
+    const UiTheme &theme = m_app->getTheme();
+    const Bounds card = m_bounds.inset(6.0f);
+    drawRoundedBox(card, 20.0f, theme.card);
+
+    const Bounds inner = card.inset(20.0f);
+    const float w = inner.width();
+    const float h = inner.height();
+
+    // Engine name and status
+    drawAlignedText(
+        m_state->engineName.empty() ? "No engine" : m_state->engineName,
+        box(inner.left(), inner.top(), w, 30.0f), 26.0f, Bounds::tl, Bounds::tl);
+    std::string status = m_state->ignitionOn ? "Ignition on" : "Ignition off";
+    if (m_state->dynoOn) status += "   |   Dyno on";
+    drawTextColored(status, box(inner.left(), inner.top() - 36.0f, w, 22.0f), 17.0f, Bounds::tl, Bounds::tl, theme.textMuted);
+
+    // Arc gauge: 270 degrees, clockwise from bottom-left
+    const double redline = std::max(1000.0, m_state->redlineRpm);
+    const double maxRpm = std::ceil(redline * 1.15 / 1000.0) * 1000.0;
+    const float radius = std::max(40.0f, std::min(w * 0.40f, h * 0.24f));
+    const Point center(inner.center_h(), inner.top() - 70.0f - radius);
+    const float thickness = std::max(6.0f, radius * 0.07f);
+    const float a0 = 1.25f * Pi;   // 225 degrees (start, 0 rpm)
+    const float a1 = -0.25f * Pi;  // -45 degrees (end, max rpm)
+    auto angleOf = [&](double rpm) {
+        const double v = std::min(1.0, std::max(0.0, rpm / maxRpm));
+        return (float)(a0 - v * (a0 - a1));
+    };
+
+    drawArc(center, radius - thickness, radius, a1, a0, theme.control);
+    drawArc(center, radius - thickness, radius, a1, angleOf(redline), mix(theme.control, theme.danger, 0.55f));
+
+    const double rpm = std::max(0.0, m_state->rpm);
+    if (rpm > 1.0) {
+        const ysVector valueColor = (rpm >= redline) ? theme.danger : theme.accent;
+        drawArc(center, radius - thickness, radius, angleOf(rpm), a0, valueColor);
+    }
+
+    // Big number in the middle
+    const float big = std::min(96.0f, radius * 0.62f);
+    const std::string rpmText = std::to_string((int)std::round(rpm / 10.0) * 10);
+    drawAlignedText(rpmText, Bounds(1.0f, 1.0f, center + Point(0.0f, big * 0.12f), Bounds::center), big, Bounds::center, Bounds::center);
+    drawTextColored("rpm", Bounds(1.0f, 1.0f, center + Point(0.0f, -big * 0.55f), Bounds::center), 20.0f, Bounds::center, Bounds::center, theme.textMuted);
+
+    // Gear row: N 1 2 3 4 5 6
+    const int gears = std::max(1, std::min(10, m_state->gearCount));
+    const float gearY = center.y - radius * 0.95f;
+    const float gearStep = std::min(44.0f, w / (gears + 2));
+    const float gearStart = inner.center_h() - gearStep * gears / 2.0f;
+    for (int g = -1; g < gears; ++g) {
+        const std::string label = (g < 0) ? "N" : std::to_string(g + 1);
+        const bool current = (g == m_state->gear);
+        const Point p(gearStart + (g + 1) * gearStep, gearY);
+        if (current) {
+            drawCircle(p, 19.0f, theme.accent);
+        }
+        drawTextColored(
+            label, Bounds(1.0f, 1.0f, p, Bounds::center), 22.0f, Bounds::center, Bounds::center,
+            current ? theme.accentText : theme.textMuted);
+    }
+
+    // Stat tiles, two by two, under the gauge
+    const float tilesTop = gearY - 44.0f;
+    const float tileGap = 12.0f;
+    const float tileH = std::max(60.0f, std::min(110.0f, (tilesTop - inner.bottom() - tileGap) / 2));
+    const float tileW = (w - tileGap) / 2;
+    if (tilesTop - inner.bottom() > tileH) {
+        std::ostringstream speed, throttle, power, torque;
+        speed << (int)std::round(std::abs(m_state->speedMph));
+        throttle << (int)std::round(m_state->throttleActual * 100.0);
+        if (m_state->dynoOn) {
+            power << (int)std::round(m_state->powerHp);
+            torque << (int)std::round(m_state->torqueLbFt);
+        }
+
+        renderStat(box(inner.left(), tilesTop, tileW, tileH), "Speed", speed.str(), "mph");
+        renderStat(box(inner.left() + tileW + tileGap, tilesTop, tileW, tileH), "Throttle", throttle.str(), "%");
+        if (tilesTop - inner.bottom() > 2 * tileH + tileGap) {
+            const float row2 = tilesTop - tileH - tileGap;
+            renderStat(box(inner.left(), row2, tileW, tileH), "Power",
+                m_state->dynoOn ? power.str() : "-", m_state->dynoOn ? "hp" : "dyno off");
+            renderStat(box(inner.left() + tileW + tileGap, row2, tileW, tileH), "Torque",
+                m_state->dynoOn ? torque.str() : "-", m_state->dynoOn ? "lb-ft" : "dyno off");
+        }
+    }
 }

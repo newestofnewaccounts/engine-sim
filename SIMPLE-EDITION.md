@@ -15,44 +15,45 @@ Everything is on the button bar at the bottom of the screen:
 
 | Button | What it does |
 |---|---|
-| **HOLD TO START** | Hold it until the engine runs. It turns the ignition on for you. |
-| **IGNITION** | Turns the engine off and on. |
-| **GEAR – / GEAR +** | Change gear. **N** means neutral. |
-| **THROTTLE** | Drag to rev the engine. Drag back to the left to idle. |
-| **DYNO** | Measures power and torque. |
-| **VOLUME** | Sound level, remembered for next time. |
-| **ENGINES** | Pick one of the 20 built-in engines, or one you built. |
-| **BUILD ENGINE** | Design your own engine: layout, cylinders, size, redline, cam and exhaust. |
-| **VIEW** | Simple screen, detailed screen (all gauges) or engine only. |
-| **SOUND STUDIO** | Holds the engine in one steady sound and records it to WAV (see below). |
-| **HELP** | Shows the controls. Press **F1** any time. |
+| **Hold to start** | Hold it until the engine runs. It turns the ignition on for you. |
+| **Ignition** | Turns the engine off and on. |
+| **Gear - / Gear +** | Change gear. **N** means neutral. |
+| **Throttle** | Drag to rev the engine. Drag back to the left to idle. |
+| **Dyno** | Measures power and torque. |
+| **Volume** | Sound level, remembered for next time. |
+| **Engines** | Pick one of the 20 built-in engines, or one you built. |
+| **Build engine** | Design your own engine: layout, cylinders, size, redline, cam and exhaust. |
+| **View** | Simple screen, detailed screen (all gauges) or engine only. |
+| **Sound studio** | Holds the engine in one steady sound and records it to WAV (see below). |
+| **Light / Dark** | Switches between the dark and light theme (remembered). |
+| **Help** | Shows the controls. Press **F1** any time. |
 
 ## Sound Studio (recording sounds for games)
 
-Click **SOUND STUDIO**. A panel opens on the right. Pick a mode:
+Click **Sound studio**. A panel opens on the right. Pick a mode:
 
 | Mode | What you hear |
 |---|---|
 | **Drive** | Normal driving; nothing is held. |
 | **Idle** | Throttle closed, no load. Starts the engine for you if needed. |
-| **Cruise** | Held at the **TARGET** rpm with part throttle (set with **LOAD**). |
+| **Cruise** | Held at the **Target** rpm with part throttle (set with **Load**). |
 | **Wide open** | Held at the target rpm with full throttle (full load). |
 | **Overrun** | Spun at the target rpm with the throttle closed (lift-off / engine braking). |
 | **Redline** | Held at the redline with full throttle. |
 | **Rev limiter** | Full throttle with no load, bouncing off the rev limiter. |
 
 The dynamometer holds the exact rpm, so the sound stays steady. Wait for
-**STEADY**, then press **RECORD**, and **STOP** when you have enough. Files are
+**Steady**, then press **Record**, and **Stop** when you have enough. Files are
 saved as 16-bit 44.1 kHz mono WAV in the `recordings` folder next to `bin`,
-named like `GM LS - Overrun - 3000rpm.wav`. **OPEN FOLDER** shows them.
-The recording is exactly what you hear, so the **VOLUME** slider affects it.
+named like `GM LS - Overrun - 3000rpm.wav`. **Open folder** shows them.
+The recording is exactly what you hear, so the **Volume** slider affects it.
 
 You can drag the engine picture to move it and scroll over it to zoom.
 
 ## Your engines
 
 Engines you build are saved in `assets/engines/custom` and appear under
-**ENGINES** as **[MY ENGINE]**. Click **EDIT** next to one to change it in the
+**Engines** as **My engine**. Click **Edit** next to one to change it in the
 builder. They are normal engine script files, so you can also edit them in a
 text editor and press **Enter** in the app to reload.
 
@@ -71,5 +72,14 @@ Tab view · F fullscreen · F1 help · Enter reload · 1–5 slow motion · F2/F
 - Simple view by default (detailed view one click away)
 - A mistake in an engine script now shows an error instead of crashing
 - Fixed a memory bug that could crash engines with more than 8 cylinders (V10, V12)
-- Remembers your last engine, volume and view
+- Remembers your last engine, volume, view and theme
+- Clean card-based look with a dark and a light theme and the Inter font
+- Dashboard with a big rpm gauge, gear, speed, throttle, power and torque
+- Sound studio: hold idle / cruise / wide open / overrun / redline / rev limiter and record WAV
 - Works when started from a shortcut
+
+## Credits
+
+Based on Engine Simulator by AngeTheGreat (MIT licence). The interface font is
+[Inter](https://rsms.me/inter/) by Rasmus Andersson (SIL Open Font License,
+see `basic/fonts/Inter/OFL.txt`).

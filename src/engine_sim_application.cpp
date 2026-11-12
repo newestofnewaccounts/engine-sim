@@ -98,6 +98,9 @@ EngineSimApplication::EngineSimApplication() {
     m_banner = nullptr;
     m_overlay = nullptr;
     m_studioPanel = nullptr;
+    m_dashboard = nullptr;
+
+    m_theme = UiTheme::make(true);
 }
 
 EngineSimApplication::~EngineSimApplication() {
@@ -127,6 +130,8 @@ void EngineSimApplication::initialize(void *instance, ysContextObject::DeviceAPI
     m_simple.viewMode = std::min(2, std::max(0, m_settings.getInt("view", 2)));
     m_screen = m_simple.viewMode;
     m_simple.studioOpen = m_settings.getBool("studio_open", false);
+    m_theme = UiTheme::make(m_settings.get("theme", "dark") != "light");
+    applyThemeColors();
     EngineBuilder::deserialize(m_settings.get("builder", ""), &m_simple.builder);
     if (!m_settings.getBool("help_seen", false)) {
         m_simple.overlay = SimpleOverlay::Help;
@@ -189,6 +194,8 @@ void EngineSimApplication::initialize() {
 
     m_textRenderer.SetEngine(&m_engine);
     m_textRenderer.SetRenderer(m_engine.GetUiRenderer());
+    // The console loads Inter if it is shipped in basic/fonts/Inter (the
+    // build patches delta-studio for this), otherwise the original pixel font.
     m_textRenderer.SetFont(m_engine.GetConsole()->GetFont());
 
     loadStartupEngine();
@@ -620,6 +627,38 @@ void EngineSimApplication::configure(const ApplicationSettings &settings) {
     m_yellow = ysColor::srgbiToLinear(m_applicationSettings.colorYellow);
     m_blue = ysColor::srgbiToLinear(m_applicationSettings.colorBlue);
     m_green = ysColor::srgbiToLinear(m_applicationSettings.colorGreen);
+
+    // Simple Edition: the dark / light theme decides the main colours
+    applyThemeColors();
+}
+
+void EngineSimApplication::applyThemeColors() {
+    m_background = m_theme.card;
+    m_foreground = m_theme.text;
+    m_shadow = m_theme.page;
+    m_highlight1 = m_theme.danger;
+    m_highlight2 = m_theme.text;
+    m_red = m_theme.danger;
+    m_blue = m_theme.accent;
+    m_green = m_theme.success;
+    m_orange = m_theme.warning;
+
+    if (!m_theme.dark) {
+        // Darker versions so the engine drawing stays readable on white
+        m_pink = ysColor::srgbiToLinear(0xC2185B);
+        m_yellow = ysColor::srgbiToLinear(0xB07800);
+    }
+    else {
+        m_pink = ysColor::srgbiToLinear(0xF394BE);
+        m_yellow = ysColor::srgbiToLinear(0xFDBD2E);
+    }
+}
+
+void EngineSimApplication::setDarkTheme(bool dark) {
+    m_theme = UiTheme::make(dark);
+    applyThemeColors();
+    m_settings.set("theme", dark ? "dark" : "light");
+    m_settings.save();
 }
 
 void EngineSimApplication::createObjects(Engine *engine) {
@@ -920,6 +959,13 @@ void EngineSimApplication::updateSimpleState() {
     m_simple.rpm = hasEngine ? m_iceEngine->getRpm() : 0.0;
     m_simple.redlineRpm = hasEngine ? units::toRpm(m_iceEngine->getRedline()) : 0.0;
     m_simple.engineName = hasEngine ? m_iceEngine->getName() : "";
+    m_simple.gearCount = hasEngine ? m_simulator->getTransmission()->getGearCount() : 6;
+    m_simple.speedMph = (hasEngine && m_simulator->getVehicle() != nullptr)
+        ? units::convert(m_simulator->getVehicle()->getSpeed(), units::mile / units::hour)
+        : 0.0;
+    m_simple.throttleActual = hasEngine ? m_iceEngine->getSpeedControl() : 0.0;
+    m_simple.powerHp = hasEngine ? units::convert(m_simulator->getDynoPower(), units::hp) : 0.0;
+    m_simple.torqueLbFt = hasEngine ? units::convert(m_simulator->getFilteredDynoTorque(), units::ft_lb) : 0.0;
     m_simple.viewMode = m_screen;
 
     // Sound Studio: turn the slider position into a target rpm (steps of 50)
@@ -1095,6 +1141,10 @@ void EngineSimApplication::processSimpleCommands() {
             break;
         }
         case T::ToggleRecord: toggleWavRecording(); break;
+        case T::ToggleTheme:
+            setDarkTheme(!m_theme.dark);
+            refreshUserInterface(); // rebuild so every control picks up the new colours
+            return;                 // the rest of this frame's commands belong to the old UI
         case T::OpenRecordings:
         {
             const std::string folder = recordingsFolder();
@@ -1436,7 +1486,7 @@ void EngineSimApplication::renderScene() {
     m_shaders.CalculateUiCamera(screenWidth, screenHeight);
 
     // Simple Edition: reserve a strip at the bottom for the control bar
-    const float barHeight = (float)std::max(56, std::min(84, screenHeight / 13));
+    const float barHeight = (float)std::max(72, std::min(96, screenHeight / 11));
     const Bounds contentBounds(
         (float)screenWidth, (float)screenHeight - barHeight, { 0, (float)screenHeight });
 
@@ -1493,21 +1543,26 @@ void EngineSimApplication::renderScene() {
         Grid grid;
         grid.v_cells = 1;
         grid.h_cells = 3;
-        m_engineView->setDrawFrame(true);
+        m_engineView->setDrawFrame(false);
         m_engineView->setBounds(grid.get(windowBounds, 0, 0, 2, 1));
         m_engineView->setLocalPosition({ 0, 0 });
         m_engineView->activate();
 
-        m_rightGaugeCluster->m_bounds = grid.get(windowBounds, 2, 0, 1, 1);
+        // Simple Edition: the new dashboard card instead of the old gauges
+        m_dashboard->m_bounds = grid.get(windowBounds, 2, 0, 1, 1);
 
         m_engineView->setVisible(true);
-        m_rightGaugeCluster->setVisible(true);
+        m_rightGaugeCluster->setVisible(false);
         m_oscCluster->setVisible(false);
         m_performanceCluster->setVisible(false);
         m_loadSimulationCluster->setVisible(false);
         m_mixerCluster->setVisible(false);
         m_infoCluster->setVisible(false);
     }
+
+    // Simple Edition: dashboard only in the simple view (and not under panels)
+    m_dashboard->setVisible(m_screen == 2 && !m_simple.studioOpen && !isOverlayOpen());
+    if (m_dashboard->isVisible()) m_dashboard->activate();
 
     // Simple Edition: Sound Studio takes the right third, engine on the left
     if (m_studioPanel != nullptr) {
@@ -1517,7 +1572,7 @@ void EngineSimApplication::renderScene() {
             Grid grid;
             grid.v_cells = 1;
             grid.h_cells = 3;
-            m_engineView->setDrawFrame(true);
+            m_engineView->setDrawFrame(false);
             m_engineView->setBounds(grid.get(contentBounds, 0, 0, 2, 1));
             m_engineView->setLocalPosition({ 0, 0 });
             m_engineView->setVisible(true);
@@ -1628,6 +1683,10 @@ void EngineSimApplication::refreshUserInterface() {
 
     m_banner = m_uiManager.getRoot()->addElement<SimpleMessageBanner>();
     m_banner->setState(&m_simple);
+
+    m_dashboard = m_uiManager.getRoot()->addElement<SimpleDashboard>();
+    m_dashboard->setState(&m_simple);
+    m_dashboard->setVisible(false);
 
     m_studioPanel = m_uiManager.getRoot()->addElement<SimpleStudioPanel>();
     m_studioPanel->build(&m_simple);

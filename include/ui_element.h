@@ -113,6 +113,30 @@ class UiElement {
                 float height,
                 const Point &ref = Bounds::tm);
 
+        // Simple Edition: modern look helpers
+        void drawRoundedBox(const Bounds &bounds, float radius, const ysVector &color);
+        void drawCircle(const Point &center, float radius, const ysVector &color);
+        void drawArc(
+                const Point &center,
+                float innerRadius,
+                float outerRadius,
+                float startAngle,
+                float endAngle,
+                const ysVector &color);
+        void drawTextColored(
+                const std::string &s,
+                const Bounds &bounds,
+                float height,
+                const Point &ref,
+                const Point &refText,
+                const ysVector &color);
+        void drawCenteredTextColored(
+                const std::string &s,
+                const Bounds &bounds,
+                float height,
+                const ysVector &color);
+        float textWidth(const std::string &s, float height) const;
+
     protected:
         std::vector<UiElement *> m_children;
         UiElement *m_parent;

@@ -297,6 +297,139 @@ void UiElement::drawAlignedText(
         s, origin.x - r.x, origin.y - r.y, height);
 }
 
+void UiElement::drawRoundedBox(const Bounds &bounds, float radius, const ysVector &color) {
+    const Bounds world = getRenderBounds(bounds);
+    const float w = world.width();
+    const float h = world.height();
+    if (w <= 0 || h <= 0) return;
+
+    const float r = std::fmax(0.0f, std::fmin(radius, std::fmin(w, h) / 2));
+    GeometryGenerator *generator = m_app->getGeometryGenerator();
+
+    GeometryGenerator::GeometryIndices indices;
+    generator->startShape();
+
+    // Wide band (full width, height minus the corners)
+    GeometryGenerator::Line2dParameters band;
+    band.x0 = world.left();
+    band.x1 = world.right();
+    band.y0 = band.y1 = world.center_v();
+    band.lineWidth = h - 2 * r;
+    if (band.lineWidth > 0) generator->generateLine2d(band);
+
+    // Tall band (full height, width minus the corners)
+    band.x0 = world.left() + r;
+    band.x1 = world.right() - r;
+    band.lineWidth = h;
+    if (band.x1 > band.x0) generator->generateLine2d(band);
+
+    // Corners
+    if (r > 0.5f) {
+        GeometryGenerator::Circle2dParameters corner;
+        corner.radius = r;
+        corner.maxEdgeLength = std::fmax(1.0f, r * 0.3f);
+        const float xs[2] = { world.left() + r, world.right() - r };
+        const float ys[2] = { world.bottom() + r, world.top() - r };
+        for (float x : xs) {
+            for (float y : ys) {
+                corner.center_x = x;
+                corner.center_y = y;
+                generator->generateCircle2d(corner);
+            }
+        }
+    }
+
+    generator->endShape(&indices);
+
+    resetShader();
+    m_app->getShaders()->SetBaseColor(color);
+    m_app->drawGenerated(indices, 0x11, m_app->getShaders()->GetUiFlags());
+}
+
+void UiElement::drawCircle(const Point &center, float radius, const ysVector &color) {
+    if (radius <= 0) return;
+
+    const Point c = getRenderPoint(center);
+    GeometryGenerator *generator = m_app->getGeometryGenerator();
+
+    GeometryGenerator::Circle2dParameters params;
+    params.center_x = c.x;
+    params.center_y = c.y;
+    params.radius = radius;
+    params.maxEdgeLength = std::fmax(1.0f, radius * 0.2f);
+
+    GeometryGenerator::GeometryIndices indices;
+    generator->startShape();
+    generator->generateCircle2d(params);
+    generator->endShape(&indices);
+
+    resetShader();
+    m_app->getShaders()->SetBaseColor(color);
+    m_app->drawGenerated(indices, 0x11, m_app->getShaders()->GetUiFlags());
+}
+
+void UiElement::drawArc(
+    const Point &center,
+    float innerRadius,
+    float outerRadius,
+    float startAngle,
+    float endAngle,
+    const ysVector &color)
+{
+    if (outerRadius <= innerRadius || endAngle <= startAngle) return;
+
+    const Point c = getRenderPoint(center);
+    GeometryGenerator *generator = m_app->getGeometryGenerator();
+
+    GeometryGenerator::Ring2dParameters params;
+    params.center_x = c.x;
+    params.center_y = c.y;
+    params.innerRadius = innerRadius;
+    params.outerRadius = outerRadius;
+    params.startAngle = startAngle;
+    params.endAngle = endAngle;
+    params.maxEdgeLength = std::fmax(1.0f, outerRadius * 0.05f);
+
+    GeometryGenerator::GeometryIndices indices;
+    generator->startShape();
+    generator->generateRing2d(params);
+    generator->endShape(&indices);
+
+    resetShader();
+    m_app->getShaders()->SetBaseColor(color);
+    m_app->drawGenerated(indices, 0x11, m_app->getShaders()->GetUiFlags());
+}
+
+void UiElement::drawTextColored(
+    const std::string &s,
+    const Bounds &bounds,
+    float height,
+    const Point &ref,
+    const Point &refText,
+    const ysVector &color)
+{
+    dbasic::TextRenderer *text = m_app->getTextRenderer();
+    text->SetColor(ysColor::linearToSrgb(color));
+    drawAlignedText(s, bounds, height, ref, refText);
+    text->SetColor(ysColor::linearToSrgb(m_app->getForegroundColor()));
+}
+
+void UiElement::drawCenteredTextColored(
+    const std::string &s,
+    const Bounds &bounds,
+    float height,
+    const ysVector &color)
+{
+    dbasic::TextRenderer *text = m_app->getTextRenderer();
+    text->SetColor(ysColor::linearToSrgb(color));
+    drawAlignedText(s, bounds, height, Bounds::center, Bounds::center);
+    text->SetColor(ysColor::linearToSrgb(m_app->getForegroundColor()));
+}
+
+float UiElement::textWidth(const std::string &s, float height) const {
+    return m_app->getTextRenderer()->CalculateWidth(s, height);
+}
+
 void UiElement::drawCenteredText(
         const std::string &s,
         const Bounds &bounds,
