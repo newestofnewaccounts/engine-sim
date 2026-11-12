@@ -59,6 +59,12 @@ jobs:
           $f = 'dependencies/submodules/piranha/src/path.cpp'
           (Get-Content $f -Raw) -replace 'is_complete\(\)', 'is_absolute()' | Set-Content $f -NoNewline
 
+          # delta-studio links the *debug* D3DX libraries next to the release
+          # ones, which makes the app need d3dx10d_43.dll (never present on
+          # normal PCs). Link only the release versions.
+          $c = 'dependencies/submodules/delta-studio/CMakeLists.txt'
+          (Get-Content $c) | Where-Object { $_ -notmatch 'd3dx(9|10|11)d\.lib' } | Set-Content $c
+
       - name: Install Flex and Bison
         run: choco install winflexbison3 -y --no-progress
 
