@@ -88,6 +88,8 @@ namespace {
         double maxRpm = 0;
         double idleRms = 0;
         double fullRms = 0;
+        double crankMax = 0;   // highest rpm while the starter is on
+        double catchMax = 0;   // highest rpm in the seconds after the starter
         double wallSeconds = 0;
         std::string problem;
     };
@@ -138,7 +140,7 @@ namespace {
         while (simTime < 10.0 && frames < 60 * 60) {
             ++frames;
 
-            const bool starter = simTime < 2.0;
+            const bool starter = simTime < 3.0;
             const bool fullThrottle = simTime >= 7.0;
             sim->m_starterMotor.m_enabled = starter;
             engine->setSpeedControl(fullThrottle ? 1.0 : 0.0);
@@ -156,6 +158,9 @@ namespace {
                 r.problem = "engine speed became NaN";
                 break;
             }
+
+            if (starter) r.crankMax = std::max(r.crankMax, rpm);
+            else if (simTime < 4.5) r.catchMax = std::max(r.catchMax, rpm);
 
             if (simTime >= 4.5 && simTime < 7.0) {
                 idleSum += rpm;
@@ -231,6 +236,7 @@ int main(int argc, char **argv) {
             const SimResult sim = simulate(loaded);
             report << "| -> simulated | idle " << fmt(sim.idleRpm) << " rpm (" << fmt(sim.idleMin) << "-" << fmt(sim.idleMax)
                 << "), max " << fmt(sim.maxRpm) << " rpm | audio rms idle " << fmt(sim.idleRms) << ", full " << fmt(sim.fullRms)
+                << ", crank " << fmt(sim.crankMax) << ", after start " << fmt(sim.catchMax)
                 << ", " << fmt(sim.wallSeconds, 1) << " s |\n";
         }
     }
@@ -263,7 +269,18 @@ int main(int argc, char **argv) {
     add(S::Layout::V, 12, 6.0, 7000, S::Character::Balanced, S::Cam::Mild, S::Exhaust::Sporty);
     add(S::Layout::Flat, 4, 2.5, 6500, S::Character::Balanced, S::Cam::Sport, S::Exhaust::Loud);
 
-    report << "\n## Engine builder\n\n| Engine | Settings | Result | Idle rpm (min-max) | Max rpm | Audio rms idle / full | Time |\n|---|---|---|---|---|---|---|\n";
+    // Small engines: start from the hardest case and change one setting at a
+    // time, to show what stops a tiny single-cylinder from starting.
+    add(S::Layout::Inline, 1, 0.2, 10000, S::Character::RevHappy, S::Cam::Sport, S::Exhaust::Loud);
+    add(S::Layout::Inline, 1, 0.2, 6500, S::Character::RevHappy, S::Cam::Race, S::Exhaust::Loud);
+    add(S::Layout::Inline, 1, 0.5, 10000, S::Character::RevHappy, S::Cam::Race, S::Exhaust::Loud);
+    add(S::Layout::Inline, 1, 0.2, 10000, S::Character::Balanced, S::Cam::Race, S::Exhaust::Loud);
+    add(S::Layout::Inline, 1, 0.2, 10000, S::Character::RevHappy, S::Cam::Race, S::Exhaust::Sporty);
+    add(S::Layout::Inline, 1, 0.2, 6500, S::Character::Balanced, S::Cam::Sport, S::Exhaust::Sporty);
+    add(S::Layout::Inline, 1, 0.1, 6500, S::Character::Balanced, S::Cam::Mild, S::Exhaust::Quiet);
+    add(S::Layout::Inline, 2, 0.4, 10000, S::Character::RevHappy, S::Cam::Race, S::Exhaust::Loud);
+
+    report << "\n## Engine builder\n\n| Engine | Settings | Result | Idle rpm (min-max) | Max rpm | Audio rms idle / full | Crank / after-start max rpm | Time |\n|---|---|---|---|---|---|---|---|\n";
 
     for (const S &config : configs) {
         S s = config;
@@ -278,7 +295,7 @@ int main(int argc, char **argv) {
 
         if (loaded.engine == nullptr) {
             ++failures;
-            report << "| " << EngineBuilder::engineName(s) << " | " << settings << " | FAILED to load: " << loaded.error << " | | | | |\n";
+            report << "| " << EngineBuilder::engineName(s) << " | " << settings << " | FAILED to load: " << loaded.error << " | | | | | |\n";
             std::cout << "[FAIL] " << EngineBuilder::engineName(s) << " load: " << loaded.error << std::endl;
             continue;
         }
@@ -291,9 +308,11 @@ int main(int argc, char **argv) {
             << fmt(sim.idleRpm) << " (" << fmt(sim.idleMin) << "-" << fmt(sim.idleMax) << ") | "
             << fmt(sim.maxRpm) << " / " << s.redlineRpm << " | "
             << fmt(sim.idleRms) << " / " << fmt(sim.fullRms) << " | "
+            << fmt(sim.crankMax) << " / " << fmt(sim.catchMax) << " | "
             << fmt(sim.wallSeconds, 1) << " s |\n";
 
         std::cout << (sim.ok ? "[ OK ] " : "[FAIL] ") << EngineBuilder::engineName(s) << " " << settings
+            << " crank=" << fmt(sim.crankMax) << " catch=" << fmt(sim.catchMax)
             << " idle=" << fmt(sim.idleRpm) << " max=" << fmt(sim.maxRpm) << " " << sim.problem << std::endl;
 
         std::error_code ec;
