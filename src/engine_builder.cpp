@@ -383,12 +383,19 @@ std::string EngineBuilder::generateScript(const Settings &input) {
     const double outletCfm = clampd(1000.0 * sizeRatio * rpmRatio * 2.0 / bankCount, 300.0, 2500.0);
     const double primaryCfm = clampd(400.0 * cylRatio * rpmRatio, 100.0, 1000.0);
     const double plenumL = clampd(0.8 + 0.15 * s.displacementLiters, 0.5, 2.5);
+
+    // Engines under 0.5 L: shrink the moving parts and friction with the
+    // engine and give a little more idle air, otherwise tiny engines are too
+    // heavy and draggy to keep themselves running.
+    const double smallScale = std::min(1.0, s.displacementLiters / 0.5);
+    idleAirFactor *= 1.0 + 0.6 * (1.0 - smallScale);
     const double idlePlate = 1.0 - clampd(0.004 * idleAirFactor / rpmRatio, 0.001, 0.03);
 
     const double starterTorque = clampd(200.0 * sizeRatio, 40.0, 250.0);
-    const double frictionTorque = clampd(2.5 * s.displacementLiters, 1.0, 20.0);
-    const double crankMassLb = clampd(60.0 * sizeRatio, 8.0, 80.0);
-    const double flywheelMassLb = clampd(10.0 + 4.0 * s.displacementLiters + (n <= 2 ? 6.0 : 0.0), 10.0, 40.0);
+    const double frictionTorque = clampd(2.5 * s.displacementLiters, 0.25, 20.0);
+    const double crankMassLb = clampd(60.0 * sizeRatio, std::max(2.0, 8.0 * smallScale), 80.0);
+    const double flywheelMassLb =
+        clampd(10.0 + 4.0 * s.displacementLiters + (n <= 2 ? 6.0 : 0.0), 10.0, 40.0) * std::max(0.3, smallScale);
     const double flywheelRadiusIn = clampd(5.5 + 0.4 * s.displacementLiters, 5.5, 8.0);
     const double pistonMassG = clampd(100.0 * std::pow(boreRatio, 3.0), 30.0, 250.0);
     const double rodMassG = clampd(50.0 * std::pow(boreRatio, 3.0), 20.0, 150.0);
