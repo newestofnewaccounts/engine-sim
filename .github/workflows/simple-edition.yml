@@ -119,6 +119,12 @@ jobs:
           foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
             Copy-Item "$env:WINDIR\System32\$dll" "$pkg\bin\"
           }
+          # Legacy DirectX helpers (D3DX) are not part of Windows; ship them
+          # from Microsoft's official redistributable NuGet package.
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.DXSDK.D3DX/9.29.952.8" -OutFile "$env:RUNNER_TEMP\d3dx.zip"
+          Expand-Archive "$env:RUNNER_TEMP\d3dx.zip" -DestinationPath "$env:RUNNER_TEMP\d3dx" -Force
+          Copy-Item "$env:RUNNER_TEMP\d3dx\build\native\release\bin\x64\*.dll" "$pkg\bin\"
+
           Set-Content -Path "$pkg\bin\delta.conf" -Value "../basic`n../assets" -NoNewline -Encoding ascii
 
           Copy-Item assets "$pkg\assets" -Recurse
@@ -129,6 +135,29 @@ jobs:
           if (Test-Path SIMPLE-EDITION.md) { Copy-Item SIMPLE-EDITION.md "$pkg\README.md" }
 
           Get-ChildItem $pkg -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { "Package: $($_.Count) files, $([math]::Round($_.Sum / 1MB, 1)) MB" }
+
+      # Lists every DLL the app loads that is neither shipped in bin nor part
+      # of a normal Windows 10/11 install (the build machine has extras that
+      # home PCs don't, so the app can't just be run here to find out).
+      - name: Check for missing DLLs
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $bin = "package\$env:PACKAGE\bin"
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $windows = 'kernel32','user32','gdi32','advapi32','shell32','ole32','oleaut32','comdlg32','comctl32','winmm','imm32','version','setupapi','cfgmgr32','ws2_32','d3d9','d3d10','d3d10_1','d3d11','dxgi','dsound','opengl32','dwmapi','uxtheme','shlwapi','ntdll','bcrypt','crypt32','winspool','hid','gdiplus','ucrtbase','dbghelp','powrprof','xinput1_4','vulkan-1','windowscodecs','msvcrt','rpcrt4','combase','user32'
+          $missing = @()
+          foreach ($file in Get-ChildItem $bin -Include *.exe, *.dll -Recurse) {
+            $deps = & $dumpbin /nologo /dependents $file.FullName | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+            Write-Host "$($file.Name): $($deps -join ', ')"
+            foreach ($dep in $deps) {
+              $name = [IO.Path]::GetFileNameWithoutExtension($dep).ToLower()
+              if ($name -like 'api-ms-win-*' -or $name -like 'ext-ms-*' -or $windows -contains $name) { continue }
+              if (-not (Test-Path (Join-Path $bin $dep))) { $missing += "$($file.Name) needs $dep" }
+            }
+          }
+          if ($missing.Count -gt 0) { $missing | ForEach-Object { Write-Host "::error::MISSING $_" }; exit 1 }
+          Write-Host "All DLLs are either shipped or part of Windows"
 
       - name: Check engines
         id: check
