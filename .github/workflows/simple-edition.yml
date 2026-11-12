@@ -65,6 +65,16 @@ jobs:
           $c = 'dependencies/submodules/delta-studio/CMakeLists.txt'
           (Get-Content $c) | Where-Object { $_ -notmatch 'd3dx(9|10|11)d\.lib' } | Set-Content $c
 
+          # All text is drawn with the console's font, so make the console use
+          # Inter when it is shipped (falls back to the original pixel font).
+          $k = 'dependencies/submodules/delta-studio/engines/basic/src/console.cpp'
+          $old = 'm_engine->LoadFont(&m_font, (m_defaultFontDirectory + "Silkscreen/slkscr.ttf").c_str());'
+          $new = '{ const std::string inter = m_defaultFontDirectory + "Inter/Inter-Medium.ttf"; FILE *probe = nullptr; fopen_s(&probe, inter.c_str(), "rb"); if (probe != nullptr) { fclose(probe); m_engine->LoadFont(&m_font, inter.c_str()); } else { m_engine->LoadFont(&m_font, (m_defaultFontDirectory + "Silkscreen/slkscr.ttf").c_str()); } }'
+          $src = Get-Content $k -Raw
+          if (-not $src.Contains($old)) { throw "console.cpp font line not found" }
+          $src = "#include <cstdio>`n#include <string>`n" + $src.Replace($old, $new)
+          Set-Content $k $src -NoNewline
+
       - name: Install Flex and Bison
         run: choco install winflexbison3 -y --no-progress
 
@@ -137,6 +147,21 @@ jobs:
           Copy-Item es "$pkg\es" -Recurse
           Copy-Item dependencies\submodules\delta-studio\engines\basic\fonts "$pkg\basic\fonts" -Recurse
           Copy-Item dependencies\submodules\delta-studio\engines\basic\shaders "$pkg\basic\shaders" -Recurse
+
+          # Inter font (SIL Open Font License). The font loader reads at most
+          # 1 MB, so only ship it if it fits.
+          Invoke-WebRequest "https://github.com/rsms/inter/releases/download/v4.0/Inter-4.0.zip" -OutFile "$env:RUNNER_TEMP\inter.zip"
+          Expand-Archive "$env:RUNNER_TEMP\inter.zip" -DestinationPath "$env:RUNNER_TEMP\inter" -Force
+          $ttf = Get-ChildItem "$env:RUNNER_TEMP\inter" -Recurse -Filter "Inter-Medium.ttf" | Select-Object -First 1
+          if ($ttf -and $ttf.Length -lt 1MB) {
+            New-Item -ItemType Directory -Force "$pkg\basic\fonts\Inter" | Out-Null
+            Copy-Item $ttf.FullName "$pkg\basic\fonts\Inter\Inter-Medium.ttf"
+            Get-ChildItem "$env:RUNNER_TEMP\inter" -Recurse -Filter "LICENSE*" | Select-Object -First 1 | Copy-Item -Destination "$pkg\basic\fonts\Inter\OFL.txt"
+            Write-Host "Inter-Medium.ttf shipped ($($ttf.Length) bytes)"
+          }
+          else {
+            Write-Host "::warning::Inter font not shipped (found: $($ttf.FullName), size $($ttf.Length))"
+          }
           Copy-Item LICENSE "$pkg\LICENSE.txt"
           if (Test-Path SIMPLE-EDITION.md) { Copy-Item SIMPLE-EDITION.md "$pkg\README.md" }
 
