@@ -2,8 +2,10 @@
 
 #include "../include/engine_sim_application.h"
 #include "../include/ui_utilities.h"
+#include "../include/sound_studio.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
 #include <iterator>
@@ -112,7 +114,8 @@ void SimpleSlider::render() {
         drawBox(filled, mix(background, m_color, 0.6f));
     }
 
-    drawCenteredText(m_label + " " + percent(value), m_bounds, m_fontSize, Bounds::center);
+    const std::string valueText = m_format ? m_format(value) : percent(value);
+    drawCenteredText(m_label + " " + valueText, m_bounds, m_fontSize, Bounds::center);
 }
 
 void SimpleSlider::onMouseDown(const Point &mouseLocal) {
@@ -148,7 +151,7 @@ void SimpleSlider::setFromX(float x) {
 SimpleControlBar::SimpleControlBar() {
     m_state = nullptr;
     m_start = m_ignition = m_gearDown = m_gearUp = m_dyno = nullptr;
-    m_engines = m_builder = m_view = m_help = nullptr;
+    m_engines = m_builder = m_view = m_help = m_studio = nullptr;
     m_throttle = m_volume = nullptr;
 }
 
@@ -193,6 +196,9 @@ void SimpleControlBar::build(SimpleUiState *state) {
     m_builder = button("BUILD ENGINE", [state]() { state->push(T::OpenBuilder); });
     m_view = button("VIEW", [state]() { state->push(T::CycleView); });
     m_help = button("HELP", [state]() { state->push(T::OpenHelp); });
+    m_studio = button("SOUND STUDIO", [state]() { state->push(T::ToggleStudio); });
+    m_studio->m_useActiveColor = true;
+    m_studio->m_activeColor = m_app->getRed();
 }
 
 void SimpleControlBar::update(float dt) {
@@ -212,6 +218,7 @@ void SimpleControlBar::update(float dt) {
         { m_engines, 1.2f },
         { m_builder, 1.5f },
         { m_view, 1.4f },
+        { m_studio, 1.6f },
         { m_help, 0.8f }
     };
 
@@ -236,7 +243,7 @@ void SimpleControlBar::update(float dt) {
         x += w + padding;
     }
 
-    for (SimpleButton *b : { m_start, m_ignition, m_gearDown, m_gearUp, m_dyno, m_engines, m_builder, m_view, m_help }) {
+    for (SimpleButton *b : { m_start, m_ignition, m_gearDown, m_gearUp, m_dyno, m_engines, m_builder, m_view, m_help, m_studio }) {
         b->m_fontSize = fontSize;
     }
     m_throttle->m_fontSize = fontSize;
@@ -258,6 +265,8 @@ void SimpleControlBar::update(float dt) {
     }
 
     m_help->m_active = m_state->overlay == SimpleOverlay::Help;
+    m_studio->m_active = m_state->studioOpen;
+    m_studio->m_text = m_state->recording ? "SOUND STUDIO (REC)" : "SOUND STUDIO";
     m_engines->m_active = m_state->overlay == SimpleOverlay::Engines;
     m_builder->m_active = m_state->overlay == SimpleOverlay::Builder;
 
@@ -439,7 +448,8 @@ void SimpleOverlayPanel::renderHelp(const Bounds &panel) {
         "4.  ENGINES lets you pick a different engine.",
         "5.  BUILD ENGINE lets you design your own engine in a few clicks.",
         "6.  DYNO measures power and torque. VIEW switches simple / detailed screens.",
-        "7.  Drag the engine picture to move it, scroll over it to zoom."
+        "7.  Drag the engine picture to move it, scroll over it to zoom.",
+        "8.  SOUND STUDIO holds one sound (idle, cruise, overrun, redline...) and records WAV files."
     };
     for (const char *s : steps) {
         drawAlignedText(s, box(left, y, panel.width() - 60.0f, 28.0f), 20.0f, Bounds::tl, Bounds::tl);
@@ -638,4 +648,188 @@ void SimpleOverlayPanel::renderBuilder(const Bounds &panel) {
     drawAlignedText(
         "Your engine is saved under ENGINES as [MY ENGINE], so you can play it again later.",
         box(left, infoTop - 36.0f, panel.width() - 60.0f, 30.0f), 18.0f, Bounds::tl, Bounds::tl);
+}
+
+// ============================================================================
+// SimpleStudioPanel
+
+SimpleStudioPanel::SimpleStudioPanel() {
+    m_state = nullptr;
+    for (int i = 0; i < ModeButtons; ++i) m_modes[i] = nullptr;
+    m_rpmDown = m_rpmUp = m_record = m_openFolder = nullptr;
+    m_target = m_load = nullptr;
+}
+
+SimpleStudioPanel::~SimpleStudioPanel() {
+    /* void */
+}
+
+void SimpleStudioPanel::build(SimpleUiState *state) {
+    m_state = state;
+    using T = SimpleCommand::Type;
+
+    auto button = [this](const std::string &text, std::function<void()> onClick) {
+        SimpleButton *b = addElement<SimpleButton>();
+        b->m_text = text;
+        b->m_onClick = onClick;
+        return b;
+    };
+
+    for (int i = 0; i < ModeButtons; ++i) {
+        std::string name = SoundStudio::modeName((SoundStudio::Mode)i);
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return (char)std::toupper(c); });
+        m_modes[i] = button(name, [state, i]() { state->push(T::StudioMode, i); });
+    }
+
+    m_rpmDown = button("-100", [state]() { state->push(T::StudioRpmStep, -100); });
+    m_rpmUp = button("+100", [state]() { state->push(T::StudioRpmStep, 100); });
+
+    m_target = addElement<SimpleSlider>();
+    m_target->m_label = "TARGET";
+    m_target->m_value = &state->studioTargetNorm;
+    m_target->m_color = m_app->getBlue();
+    m_target->m_format = [state](double) {
+        return std::to_string((int)std::round(state->studioTargetRpm)) + " RPM";
+    };
+
+    m_load = addElement<SimpleSlider>();
+    m_load->m_label = "LOAD";
+    m_load->m_value = &state->studioLoad;
+    m_load->m_color = m_app->getOrange();
+
+    m_record = button("RECORD", [state]() { state->push(T::ToggleRecord); });
+    m_record->m_useActiveColor = true;
+    m_record->m_activeColor = m_app->getRed();
+    m_openFolder = button("OPEN FOLDER", [state]() { state->push(T::OpenRecordings); });
+}
+
+void SimpleStudioPanel::update(float dt) {
+    if (m_state == nullptr) return;
+
+    const Bounds inner = m_bounds.inset(16.0f);
+    const float left = inner.left();
+    const float width = inner.width();
+    const float gap = 8.0f;
+    const float rowH = std::max(36.0f, std::min(52.0f, inner.height() / 17.0f));
+    const float fontSize = std::max(14.0f, std::min(19.0f, rowH * 0.38f));
+    float y = inner.top() - 44.0f; // below the title
+
+    m_rpmBox = box(left, y, width, rowH * 2.2f);
+    y -= rowH * 2.2f + gap * 2;
+
+    m_modeLabel = box(left, y, width, 24.0f);
+    y -= 28.0f;
+
+    // Drive gets its own row, the six sound modes go in pairs
+    const float half = (width - gap) / 2;
+    m_modes[0]->m_bounds = box(left, y, width, rowH);
+    y -= rowH + gap;
+    for (int i = 1; i < ModeButtons; ++i) {
+        const int column = (i - 1) % 2;
+        m_modes[i]->m_bounds = box(left + column * (half + gap), y, half, rowH);
+        if (column == 1) y -= rowH + gap;
+    }
+    y -= gap;
+
+    const SoundStudio::Mode mode = (SoundStudio::Mode)m_state->studioMode;
+    for (int i = 0; i < ModeButtons; ++i) {
+        m_modes[i]->m_active = (i == m_state->studioMode);
+        m_modes[i]->m_fontSize = fontSize;
+    }
+
+    m_targetLabel = box(left, y, width, 24.0f);
+    y -= 28.0f;
+    const float stepW = std::min(90.0f, width * 0.2f);
+    m_rpmDown->m_bounds = box(left, y, stepW, rowH);
+    m_target->m_bounds = box(left + stepW + gap, y, width - 2 * (stepW + gap), rowH);
+    m_rpmUp->m_bounds = box(left + width - stepW, y, stepW, rowH);
+    y -= rowH + gap * 2;
+
+    const bool targetUsed = SoundStudio::usesTargetRpm(mode);
+    m_rpmDown->m_enabled = targetUsed;
+    m_rpmUp->m_enabled = targetUsed;
+
+    m_loadLabel = box(left, y, width, 24.0f);
+    y -= 28.0f;
+    m_load->m_bounds = box(left, y, width, rowH);
+    y -= rowH + gap * 2;
+
+    m_record->m_bounds = box(left, y, width * 0.6f - gap / 2, rowH * 1.2f);
+    m_openFolder->m_bounds = box(left + width * 0.6f + gap / 2, y, width * 0.4f - gap / 2, rowH * 1.2f);
+    y -= rowH * 1.2f + gap * 2;
+
+    m_record->m_active = m_state->recording;
+    if (m_state->recording) {
+        const int tenths = (int)(m_state->recordSeconds * 10);
+        const int seconds = (tenths / 10) % 60;
+        m_record->m_text = "STOP  " + std::to_string(tenths / 600) + ":"
+            + (seconds < 10 ? "0" : "") + std::to_string(seconds)
+            + "." + std::to_string(tenths % 10);
+    }
+    else {
+        m_record->m_text = "RECORD";
+    }
+
+    for (SimpleButton *b : { m_rpmDown, m_rpmUp, m_record, m_openFolder }) b->m_fontSize = fontSize;
+    m_target->m_fontSize = fontSize;
+    m_load->m_fontSize = fontSize;
+
+    m_infoBox = Bounds(width, std::max(1.0f, y - inner.bottom()), { left, y }, Bounds::tl);
+
+    UiElement::update(dt);
+}
+
+void SimpleStudioPanel::render() {
+    if (m_state == nullptr) return;
+
+    const ysVector bg = m_app->getBackgroundColor();
+    const ysVector fg = m_app->getForegroundColor();
+    drawFrame(m_bounds, 1.0f, fg, bg);
+
+    const Bounds inner = m_bounds.inset(16.0f);
+    drawAlignedText("SOUND STUDIO", box(inner.left(), inner.top(), inner.width(), 32.0f), 28.0f, Bounds::tl, Bounds::tl);
+
+    // Big rpm readout
+    const SoundStudio::Mode mode = (SoundStudio::Mode)m_state->studioMode;
+    drawFrame(m_rpmBox, 1.0f, mix(bg, fg, 0.3f), bg);
+    const Bounds readout = m_rpmBox.inset(14.0f);
+    const float big = std::min(72.0f, m_rpmBox.height() * 0.62f);
+    drawAlignedText(std::to_string((int)std::round(m_state->rpm)) + " RPM", readout, big, Bounds::lm, Bounds::lm);
+
+    std::string status;
+    if (mode == SoundStudio::Mode::Off) status = "DRIVING";
+    else if (m_state->studioSteady) status = "STEADY";
+    else status = "SETTLING...";
+    drawAlignedText(status, readout, 20.0f, Bounds::tr, Bounds::tr);
+
+    std::string target;
+    if (SoundStudio::usesTargetRpm(mode)) {
+        target = "TARGET " + std::to_string((int)std::round(m_state->studioTargetRpm));
+    }
+    else if (mode == SoundStudio::Mode::Redline || mode == SoundStudio::Mode::Limiter) {
+        target = "REDLINE " + std::to_string((int)std::round(m_state->redlineRpm));
+    }
+    if (!target.empty()) {
+        drawAlignedText(target, readout, 18.0f, Bounds::br, Bounds::br);
+    }
+
+    drawAlignedText("MODE", m_modeLabel, 18.0f, Bounds::lm, Bounds::lm);
+    drawAlignedText(
+        SoundStudio::usesTargetRpm(mode) ? "TARGET RPM" : "TARGET RPM (CRUISE, WIDE OPEN, OVERRUN)",
+        m_targetLabel, 18.0f, Bounds::lm, Bounds::lm);
+    drawAlignedText(
+        mode == SoundStudio::Mode::Cruise ? "LOAD (THROTTLE)" : "LOAD (CRUISE ONLY)",
+        m_loadLabel, 18.0f, Bounds::lm, Bounds::lm);
+
+    // Description, last file and a hint
+    float y = m_infoBox.top();
+    drawAlignedText(SoundStudio::modeDescription(mode), box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl);
+    y -= 28.0f;
+    if (!m_state->lastRecording.empty()) {
+        drawAlignedText("Saved: " + m_state->lastRecording, box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl);
+        y -= 28.0f;
+    }
+    drawAlignedText("WAV files go in the recordings folder next to bin.", box(m_infoBox.left(), y, m_infoBox.width(), 24.0f), 16.0f, Bounds::tl, Bounds::tl);
+
+    UiElement::render();
 }

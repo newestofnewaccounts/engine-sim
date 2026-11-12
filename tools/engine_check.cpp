@@ -12,6 +12,8 @@
 
 #include "../include/engine_builder.h"
 #include "../include/engine_library.h"
+#include "../include/sound_studio.h"
+#include "../include/wav_recorder.h"
 
 #include "../include/engine.h"
 #include "../include/exhaust_system.h"
@@ -204,7 +206,115 @@ namespace {
         return r;
     }
 
-    std::string fmt(double v, int p = 0) {
+    std::string fmt(double v, int p = 0);
+
+    // Sound Studio: put the engine through every mode, record each to WAV,
+    // and check it holds the right speed.
+    int checkStudio(const LoadResult &loaded, const std::string &label, std::stringstream &report) {
+        int failures = 0;
+        Engine *engine = loaded.engine;
+        Simulator *sim = engine->createSimulator(loaded.vehicle, loaded.transmission);
+        engine->calculateDisplacement();
+        sim->setSimulationFrequency((int)engine->getSimulationFrequency());
+        loadImpulseResponses(engine, sim);
+        sim->startAudioRenderingThread();
+
+        const double redline = units::toRpm(engine->getRedline());
+        const std::string folder = fs::absolute("../recordings_check").string();
+
+        struct Step { SoundStudio::Mode mode; double target; double load; };
+        const Step steps[] = {
+            { SoundStudio::Mode::Idle, 0, 0 },
+            { SoundStudio::Mode::Cruise, 3000, 0.3 },
+            { SoundStudio::Mode::FullLoad, 4000, 1.0 },
+            { SoundStudio::Mode::Overrun, 3000, 0.0 },
+            { SoundStudio::Mode::Redline, 0, 0 },
+            { SoundStudio::Mode::Limiter, 0, 0 },
+            { SoundStudio::Mode::Idle, 0, 0 }
+        };
+
+        SoundStudio studio;
+        std::vector<int16_t> audio(8192);
+        const double dt = 1 / 60.0;
+
+        report << "\n### Sound Studio: " << label << "\n\n| Mode | Target | Avg rpm (min-max) | Steady | WAV | Result |\n|---|---|---|---|---|---|\n";
+
+        for (const Step &step : steps) {
+            studio.setMode(step.mode);
+            studio.setTargetRpm(step.target);
+            studio.setLoad(step.load);
+
+            WavRecorder recorder;
+            const std::string name = label + " - " + SoundStudio::modeName(step.mode);
+            recorder.start(WavRecorder::uniquePath(folder, name), 44100);
+
+            const double duration = (step.mode == SoundStudio::Mode::Idle) ? 6.0 : 3.5;
+            double t = 0, sum = 0, n = 0, lo = 1e9, hi = 0;
+            int frames = 0;
+            while (t < duration && frames < 60 * 30) {
+                ++frames;
+                sim->m_starterMotor.m_enabled = false;
+                loaded.transmission->setClutchPressure(1.0);
+                studio.apply(dt, sim, engine, loaded.transmission);
+
+                sim->startFrame(dt);
+                while (sim->simulateStep()) { /* void */ }
+                t += sim->simulationSteps() * sim->getTimestep();
+                sim->endFrame();
+
+                const int count = sim->readAudioOutput((int)audio.size(), audio.data());
+                recorder.addSamples(audio.data(), count);
+
+                const double rpm = engine->getRpm();
+                if (t > duration - 1.0) {
+                    sum += rpm; n += 1;
+                    lo = std::min(lo, rpm);
+                    hi = std::max(hi, rpm);
+                }
+            }
+
+            const double seconds = recorder.getSeconds();
+            const std::string path = recorder.stop();
+            std::error_code ec;
+            const auto bytes = fs::file_size(path, ec);
+            const bool wavOk = !ec && bytes == 44 + (uintmax_t)std::llround(seconds * 44100) * 2 && seconds > 0.5;
+
+            const double avg = (n > 0) ? sum / n : 0;
+            const double target = studio.effectiveTargetRpm(engine);
+            std::string problem;
+            switch (step.mode) {
+            case SoundStudio::Mode::Idle:
+                if (avg < 350 || avg > 2500) problem = "not idling";
+                break;
+            case SoundStudio::Mode::Limiter:
+                if (hi < redline * 0.95) problem = "never reaches the limiter";
+                break;
+            default:
+                if (std::abs(avg - target) > target * 0.03) problem = "does not hold the target rpm";
+                break;
+            }
+            if (!wavOk) problem += (problem.empty() ? "" : ", ") + std::string("bad WAV file");
+
+            if (!problem.empty()) ++failures;
+            report << "| " << SoundStudio::modeName(step.mode) << " | " << fmt(target) << " | "
+                << fmt(avg) << " (" << fmt(lo) << "-" << fmt(hi) << ") | " << (studio.isSteady() ? "yes" : "no") << " | "
+                << fmt(seconds, 1) << " s, " << bytes << " bytes | " << (problem.empty() ? "OK" : "FAILED: " + problem) << " |\n";
+            std::cout << (problem.empty() ? "[ OK ] " : "[FAIL] ") << "Studio " << label << " " << SoundStudio::modeName(step.mode)
+                << " target=" << fmt(target) << " avg=" << fmt(avg) << " range=" << fmt(lo) << "-" << fmt(hi)
+                << " wav=" << fmt(seconds, 1) << "s " << problem << std::endl;
+        }
+
+        studio.release(sim);
+        sim->endAudioRenderingThread();
+        sim->releaseSimulation();
+        delete sim;
+
+        std::error_code ec;
+        fs::remove_all(folder, ec);
+        return failures;
+    }
+
+    std::string fmt(double v, int p) {
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(p) << v;
         return ss.str();
@@ -320,6 +430,23 @@ int main(int argc, char **argv) {
     }
 
     report << "\n**Builder failures: " << failures << "**\n";
+
+    // 3. Sound Studio modes + WAV recording
+    int studioFailures = 0;
+    {
+        const LoadResult ls = loadEngineFile(assetsDir, "engines/atg-video-2/07_gm_ls.mr");
+        if (ls.engine != nullptr) studioFailures += checkStudio(ls, "GM LS", report);
+        else { ++studioFailures; report << "\nCould not load GM LS for the Sound Studio check\n"; }
+
+        S v8;
+        v8.layout = S::Layout::V; v8.cylinders = 8; v8.displacementLiters = 5.0; v8.redlineRpm = 7000;
+        const std::string rel = EngineLibrary::saveCustomEngine(assetsDir, "check_studio_v8", EngineBuilder::generateScript(v8), nullptr);
+        const LoadResult custom = loadEngineFile(assetsDir, rel);
+        if (custom.engine != nullptr) studioFailures += checkStudio(custom, "Custom V8", report);
+        else { ++studioFailures; report << "\nCould not load the custom V8 for the Sound Studio check\n"; }
+    }
+    report << "\n**Sound Studio failures: " << studioFailures << "**\n";
+    failures += studioFailures;
 
     // The generated sample of the default engine, for reading in the log
     std::cout << "\n----- Sample generated script (default settings) -----\n"

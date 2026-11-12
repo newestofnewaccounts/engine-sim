@@ -24,6 +24,8 @@
 #include "transmission.h"
 #include "simple_ui.h"
 #include "app_settings_store.h"
+#include "sound_studio.h"
+#include "wav_recorder.h"
 
 #include "delta.h"
 #include "dtv.h"
@@ -128,6 +130,16 @@ class EngineSimApplication {
         SimpleMessageBanner *m_banner;
         SimpleOverlayPanel *m_overlay;
         std::string m_lastInfoMessage;
+
+        // Sound Studio
+        void setStudioMode(SoundStudio::Mode mode);
+        void toggleWavRecording();
+        void stopWavRecording(bool announce);
+        std::string recordingsFolder() const;
+
+        SoundStudio m_studio;
+        WavRecorder m_recorder;
+        SimpleStudioPanel *m_studioPanel;
 
     protected:
         double m_speedSetting = 1.0;

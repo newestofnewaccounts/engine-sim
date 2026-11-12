@@ -30,7 +30,12 @@ struct SimpleCommand {
         BuilderAdjust,    // a = row, b = +1 / -1
         BuildEngine,
         EnginesPage,      // a = +1 / -1
-        ReloadEngine
+        ReloadEngine,
+        ToggleStudio,
+        StudioMode,       // a = SoundStudio::Mode
+        StudioRpmStep,    // a = rpm change (+/-)
+        ToggleRecord,
+        OpenRecordings
     };
 
     Type type;
@@ -71,6 +76,17 @@ struct SimpleUiState {
     std::string currentEnginePath;
 
     EngineBuilderSettings builder;
+
+    // Sound Studio
+    bool studioOpen = false;
+    int studioMode = 0;            // SoundStudio::Mode
+    double studioTargetNorm = 0.4; // target rpm slider, 0..1 between min and redline
+    double studioTargetRpm = 3000; // written by the application
+    double studioLoad = 0.3;       // cruise throttle, 0..1
+    bool studioSteady = false;
+    bool recording = false;
+    double recordSeconds = 0;
+    std::string lastRecording;
 
     void push(SimpleCommand::Type type, int a = 0, int b = 0) {
         SimpleCommand c;
@@ -119,6 +135,8 @@ public:
     double *m_value;
     bool *m_changed;
     std::string m_label;
+    // Optional: turns the 0..1 value into the text shown (default: percent)
+    std::function<std::string(double)> m_format;
     float m_fontSize;
     ysVector m_color;
 
@@ -150,8 +168,40 @@ protected:
     SimpleButton *m_builder;
     SimpleButton *m_view;
     SimpleButton *m_help;
+    SimpleButton *m_studio;
 
     Bounds m_gearBounds;
+};
+
+class SimpleStudioPanel : public UiElement {
+public:
+    static constexpr int ModeButtons = 7;
+
+    SimpleStudioPanel();
+    virtual ~SimpleStudioPanel();
+
+    void build(SimpleUiState *state);
+
+    virtual void update(float dt);
+    virtual void render();
+
+protected:
+    SimpleUiState *m_state;
+
+    SimpleButton *m_modes[ModeButtons];
+    SimpleButton *m_rpmDown;
+    SimpleButton *m_rpmUp;
+    SimpleSlider *m_target;
+    SimpleSlider *m_load;
+    SimpleButton *m_record;
+    SimpleButton *m_openFolder;
+
+    // Where render() draws text, worked out in update()
+    Bounds m_rpmBox;
+    Bounds m_modeLabel;
+    Bounds m_targetLabel;
+    Bounds m_loadLabel;
+    Bounds m_infoBox;
 };
 
 class SimpleMessageBanner : public UiElement {

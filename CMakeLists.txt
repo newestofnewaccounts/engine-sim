@@ -243,6 +243,8 @@ add_executable(engine-sim-app WIN32
     src/engine_library.cpp
     src/simple_ui.cpp
     src/app_settings_store.cpp
+    src/sound_studio.cpp
+    src/wav_recorder.cpp
 
     # Include files
     include/delta.h
@@ -284,6 +286,8 @@ add_executable(engine-sim-app WIN32
     include/engine_library.h
     include/simple_ui.h
     include/app_settings_store.h
+    include/sound_studio.h
+    include/wav_recorder.h
 )
 
 target_link_libraries(engine-sim-app
@@ -297,9 +301,13 @@ if (PIRANHA_ENABLED)
         tools/engine_check.cpp
         src/engine_builder.cpp
         src/engine_library.cpp
+        src/sound_studio.cpp
+        src/wav_recorder.cpp
 
         include/engine_builder.h
         include/engine_library.h
+        include/sound_studio.h
+        include/wav_recorder.h
     )
 
     target_link_libraries(engine-sim-check

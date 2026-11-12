@@ -21,7 +21,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <stdlib.h>
+#include <shellapi.h>
 #include <sstream>
 
 #undef min
@@ -93,6 +97,7 @@ EngineSimApplication::EngineSimApplication() {
     m_controlBar = nullptr;
     m_banner = nullptr;
     m_overlay = nullptr;
+    m_studioPanel = nullptr;
 }
 
 EngineSimApplication::~EngineSimApplication() {
@@ -121,6 +126,7 @@ void EngineSimApplication::initialize(void *instance, ysContextObject::DeviceAPI
     m_simple.volume = std::min(1.0, std::max(0.0, m_settings.getDouble("volume", 1.0)));
     m_simple.viewMode = std::min(2, std::max(0, m_settings.getInt("view", 2)));
     m_screen = m_simple.viewMode;
+    m_simple.studioOpen = m_settings.getBool("studio_open", false);
     EngineBuilder::deserialize(m_settings.get("builder", ""), &m_simple.builder);
     if (!m_settings.getBool("help_seen", false)) {
         m_simple.overlay = SimpleOverlay::Help;
@@ -310,6 +316,11 @@ void EngineSimApplication::process(float frame_dt) {
         m_oscillatorSampleOffset = (m_oscillatorSampleOffset + 1) % (44100 / 10);
     }
 
+    // Simple Edition: Sound Studio WAV recording gets exactly what is played
+    if (m_recorder.isRecording() && readSamples > 0) {
+        m_recorder.addSamples(samples, std::min(readSamples, (int)maxWrite));
+    }
+
     delete[] samples;
 
     if (readSamples > 0) {
@@ -458,6 +469,7 @@ void EngineSimApplication::run() {
         stopRecording();
     }
 
+    stopWavRecording(false);
     m_settings.save();
 
     if (m_simulator != nullptr) {
@@ -723,6 +735,9 @@ void EngineSimApplication::installEngine(Engine *engine, Vehicle *vehicle, Trans
         m_audioSource->SetMode(ysAudioSource::Mode::Stop);
     }
 
+    // A recording is named after the engine, so finish it before switching
+    stopWavRecording(true);
+
     ensureVehicleAndTransmission(&vehicle, &transmission);
     loadEngine(engine, vehicle, transmission);
     refreshUserInterface();
@@ -907,6 +922,21 @@ void EngineSimApplication::updateSimpleState() {
     m_simple.engineName = hasEngine ? m_iceEngine->getName() : "";
     m_simple.viewMode = m_screen;
 
+    // Sound Studio: turn the slider position into a target rpm (steps of 50)
+    {
+        const double redline = (m_simple.redlineRpm > 0) ? m_simple.redlineRpm : 7000.0;
+        const double lo = m_studio.minTargetRpm();
+        const double norm = std::max(0.0, std::min(1.0, m_simple.studioTargetNorm));
+        m_simple.studioTargetRpm = std::round((lo + norm * (redline - lo)) / 50.0) * 50.0;
+        m_simple.studioTargetRpm = std::min(m_simple.studioTargetRpm, redline);
+        m_studio.setTargetRpm(m_simple.studioTargetRpm);
+        m_studio.setLoad(m_simple.studioLoad);
+        m_simple.studioMode = (int)m_studio.getMode();
+        m_simple.studioSteady = m_studio.isSteady();
+        m_simple.recording = m_recorder.isRecording();
+        m_simple.recordSeconds = m_recorder.getSeconds();
+    }
+
     // In the simple view the info panel is hidden, so show its messages in
     // the banner instead (except the constant throttle updates).
     if (m_infoCluster != nullptr) {
@@ -917,6 +947,77 @@ void EngineSimApplication::updateSimpleState() {
                 m_simple.showMessage(log, false, 2.5f);
             }
         }
+    }
+}
+
+std::string EngineSimApplication::recordingsFolder() const {
+    return (std::filesystem::path(m_assetPath) / ".." / "recordings").lexically_normal().string();
+}
+
+void EngineSimApplication::setStudioMode(SoundStudio::Mode mode) {
+    if (mode == SoundStudio::Mode::Off) {
+        m_studio.release(m_simulator);
+        m_dynoSpeed = 0;
+        if (m_simulator != nullptr) {
+            m_simulator->m_dyno.m_enabled = false;
+            m_simulator->m_dyno.m_hold = false;
+        }
+    }
+    else {
+        // Make sure the Sound Studio panel is showing
+        m_simple.studioOpen = true;
+        m_simple.throttle = 0.0;
+    }
+
+    m_studio.setMode(mode);
+    m_simple.studioMode = (int)mode;
+}
+
+void EngineSimApplication::toggleWavRecording() {
+    if (m_recorder.isRecording()) {
+        stopWavRecording(true);
+        return;
+    }
+
+    if (m_iceEngine == nullptr) {
+        m_simple.showMessage("Load an engine before recording.", true, 4.0f);
+        return;
+    }
+
+    // e.g. "GM LS - Overrun - 3000rpm"
+    const SoundStudio::Mode mode = m_studio.getMode();
+    std::string name = m_iceEngine->getName() + " - " + SoundStudio::modeName(mode);
+    if (SoundStudio::usesTargetRpm(mode)) {
+        name += " - " + std::to_string((int)std::round(m_simple.studioTargetRpm)) + "rpm";
+        if (mode == SoundStudio::Mode::Cruise) {
+            name += " - load " + std::to_string((int)std::round(m_simple.studioLoad * 100)) + "pct";
+        }
+    }
+    else if (mode == SoundStudio::Mode::Redline || mode == SoundStudio::Mode::Limiter) {
+        name += " - " + std::to_string((int)std::round(m_simple.redlineRpm)) + "rpm";
+    }
+
+    const std::string path = WavRecorder::uniquePath(recordingsFolder(), name);
+    if (m_recorder.start(path, 44100)) {
+        m_simple.showMessage("Recording...  press STOP when you have enough.", false, 3.0f);
+    }
+    else {
+        m_simple.showMessage("Could not create " + path, true, 8.0f);
+    }
+}
+
+void EngineSimApplication::stopWavRecording(bool announce) {
+    if (!m_recorder.isRecording()) return;
+
+    const double seconds = m_recorder.getSeconds();
+    const std::string path = m_recorder.stop();
+    m_simple.lastRecording = std::filesystem::path(path).filename().string();
+    m_simple.recording = false;
+
+    if (announce) {
+        std::ostringstream ss;
+        ss << "Saved " << m_simple.lastRecording << " (" << std::fixed << std::setprecision(1) << seconds << " s)";
+        m_simple.showMessage(ss.str(), false, 6.0f);
     }
 }
 
@@ -971,6 +1072,37 @@ void EngineSimApplication::processSimpleCommands() {
         case T::BuildEngine: buildCustomEngine(); break;
         case T::EnginesPage: m_simple.enginesPage += command.a; break;
         case T::ReloadEngine: reloadCurrentEngine(); break;
+        case T::ToggleStudio:
+            m_simple.studioOpen = !m_simple.studioOpen;
+            if (!m_simple.studioOpen) {
+                stopWavRecording(true);
+                setStudioMode(SoundStudio::Mode::Off);
+            }
+            m_settings.setBool("studio_open", m_simple.studioOpen);
+            m_settings.save();
+            break;
+        case T::StudioMode:
+            if (command.a >= 0 && command.a < SoundStudio::ModeCount) {
+                setStudioMode((SoundStudio::Mode)command.a);
+            }
+            break;
+        case T::StudioRpmStep:
+        {
+            const double redline = m_simple.redlineRpm > 0 ? m_simple.redlineRpm : 7000.0;
+            const double lo = m_studio.minTargetRpm();
+            const double rpm = std::max(lo, std::min(redline, m_simple.studioTargetRpm + command.a));
+            m_simple.studioTargetNorm = (redline > lo) ? (rpm - lo) / (redline - lo) : 0.0;
+            break;
+        }
+        case T::ToggleRecord: toggleWavRecording(); break;
+        case T::OpenRecordings:
+        {
+            const std::string folder = recordingsFolder();
+            std::error_code ec;
+            std::filesystem::create_directories(folder, ec);
+            ShellExecuteA(NULL, "open", folder.c_str(), NULL, NULL, SW_SHOWNORMAL);
+            break;
+        }
         }
     }
 }
@@ -1278,6 +1410,13 @@ void EngineSimApplication::processEngineInput() {
     const double clutch_s = dt / (dt + clutchRC);
     m_clutchPressure = m_clutchPressure * (1 - clutch_s) + m_targetClutchPressure * clutch_s;
     m_simulator->getTransmission()->setClutchPressure(m_clutchPressure);
+
+    // Simple Edition: a Sound Studio mode overrides throttle, dyno, gear and
+    // starter so the engine stays in one steady sound.
+    if (m_studio.isActive()) {
+        m_studio.apply(dt, m_simulator, m_iceEngine, m_simulator->getTransmission());
+        m_dynoSpeed = m_simulator->m_dyno.m_rotationSpeed;
+    }
 }
 
 void EngineSimApplication::renderScene() {
@@ -1368,6 +1507,30 @@ void EngineSimApplication::renderScene() {
         m_loadSimulationCluster->setVisible(false);
         m_mixerCluster->setVisible(false);
         m_infoCluster->setVisible(false);
+    }
+
+    // Simple Edition: Sound Studio takes the right third, engine on the left
+    if (m_studioPanel != nullptr) {
+        const bool studio = m_simple.studioOpen && !isOverlayOpen();
+        m_studioPanel->setVisible(studio);
+        if (studio) {
+            Grid grid;
+            grid.v_cells = 1;
+            grid.h_cells = 3;
+            m_engineView->setDrawFrame(true);
+            m_engineView->setBounds(grid.get(contentBounds, 0, 0, 2, 1));
+            m_engineView->setLocalPosition({ 0, 0 });
+            m_engineView->setVisible(true);
+            m_studioPanel->m_bounds = grid.get(contentBounds, 2, 0, 1, 1);
+            m_studioPanel->activate();
+
+            m_rightGaugeCluster->setVisible(false);
+            m_oscCluster->setVisible(false);
+            m_performanceCluster->setVisible(false);
+            m_loadSimulationCluster->setVisible(false);
+            m_mixerCluster->setVisible(false);
+            m_infoCluster->setVisible(false);
+        }
     }
 
     // Simple Edition: control bar, message banner and full screen panels
@@ -1465,6 +1628,10 @@ void EngineSimApplication::refreshUserInterface() {
 
     m_banner = m_uiManager.getRoot()->addElement<SimpleMessageBanner>();
     m_banner->setState(&m_simple);
+
+    m_studioPanel = m_uiManager.getRoot()->addElement<SimpleStudioPanel>();
+    m_studioPanel->build(&m_simple);
+    m_studioPanel->setVisible(false);
 
     m_overlay = m_uiManager.getRoot()->addElement<SimpleOverlayPanel>();
     m_overlay->build(&m_simple);

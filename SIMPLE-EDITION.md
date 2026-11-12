@@ -24,7 +24,28 @@ Everything is on the button bar at the bottom of the screen:
 | **ENGINES** | Pick one of the 20 built-in engines, or one you built. |
 | **BUILD ENGINE** | Design your own engine: layout, cylinders, size, redline, cam and exhaust. |
 | **VIEW** | Simple screen, detailed screen (all gauges) or engine only. |
+| **SOUND STUDIO** | Holds the engine in one steady sound and records it to WAV (see below). |
 | **HELP** | Shows the controls. Press **F1** any time. |
+
+## Sound Studio (recording sounds for games)
+
+Click **SOUND STUDIO**. A panel opens on the right. Pick a mode:
+
+| Mode | What you hear |
+|---|---|
+| **Drive** | Normal driving; nothing is held. |
+| **Idle** | Throttle closed, no load. Starts the engine for you if needed. |
+| **Cruise** | Held at the **TARGET** rpm with part throttle (set with **LOAD**). |
+| **Wide open** | Held at the target rpm with full throttle (full load). |
+| **Overrun** | Spun at the target rpm with the throttle closed (lift-off / engine braking). |
+| **Redline** | Held at the redline with full throttle. |
+| **Rev limiter** | Full throttle with no load, bouncing off the rev limiter. |
+
+The dynamometer holds the exact rpm, so the sound stays steady. Wait for
+**STEADY**, then press **RECORD**, and **STOP** when you have enough. Files are
+saved as 16-bit 44.1 kHz mono WAV in the `recordings` folder next to `bin`,
+named like `GM LS - Overrun - 3000rpm.wav`. **OPEN FOLDER** shows them.
+The recording is exactly what you hear, so the **VOLUME** slider affects it.
 
 You can drag the engine picture to move it and scroll over it to zoom.
 
